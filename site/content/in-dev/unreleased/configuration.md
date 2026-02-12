@@ -75,6 +75,17 @@ As stated above, a configuration file can also be provided at runtime; it should
 (mounted) at `$PWD/config/application.properties` for Polaris server to recognize it. In Polaris
 official Docker images, this location is `/deployment/config/application.properties`.
 
+For **binary distributions**, the configuration files are located at:
+
+- `server/config/application.properties` – for the Polaris server component
+- `admin/config/application.properties` – for the Polaris admin tool
+
+These files are included in the binary distribution with all configuration properties commented out.
+Simply uncomment and modify the properties you need. The configuration file is read relative to
+the current working directory when starting each component, so ensure you run the server or admin
+tool from within its respective directory (e.g., `server/` or `admin/`), or adjust your working
+directory accordingly.
+
 For Kubernetes deployments, the configuration file is typically defined as a `ConfigMap`, then
 mounted in the container at `/deployment/config/application.properties`. It can be mounted in
 read-only mode, as Polaris only reads the configuration file once, at startup.

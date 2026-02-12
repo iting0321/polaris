@@ -60,8 +60,14 @@ distributions {
       // Copy admin distribution contents
       into("admin") { from(adminDistribution) { exclude("quarkus-app-dependencies.txt") } }
 
+      // Copy admin config directory
+      into("admin") { from(adminProject.file("distribution/config")) { into("config") } }
+
       // Copy server distribution contents
       into("server") { from(serverDistribution) { exclude("quarkus-app-dependencies.txt") } }
+
+      // Copy server config directory
+      into("server") { from(serverProject.file("distribution/config")) { into("config") } }
 
       // Copy scripts to bin directory
       into("bin") {
