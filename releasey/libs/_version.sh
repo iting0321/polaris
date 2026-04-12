@@ -90,6 +90,12 @@ function update_version {
   local version="$1"
   update_version_txt "${version}"
   update_helm_version "${version}"
+  update_python_version "${version}"
+}
+
+function update_python_version {
+  local version="$1"
+  exec_process sed -E -i~ "s/^version = \"[^\"]+\"/version = \"${version}\"/" "$PYTHON_CLIENT_PYPROJECT"
 }
 
 function update_version_txt {

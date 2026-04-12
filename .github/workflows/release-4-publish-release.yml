@@ -194,6 +194,9 @@ jobs:
           dev_helm_url="${APACHE_DIST_URL}/dev/polaris/helm-chart/${version_without_rc}"
           release_helm_url="${APACHE_DIST_URL}/release/polaris/helm-chart/${version_without_rc}"
 
+          dev_python_url="${APACHE_DIST_URL}/dev/polaris/python-cli/${version_without_rc}"
+          release_python_url="${APACHE_DIST_URL}/release/polaris/python-cli/${version_without_rc}"
+
           exec_process svn mv --username "$SVN_USERNAME" --password "$SVN_PASSWORD" --non-interactive \
             "${dev_artifacts_url}" "${release_artifacts_url}" \
             -m "Release Apache Polaris ${version_without_rc}"
@@ -202,9 +205,13 @@ jobs:
             "${dev_helm_url}" "${release_helm_url}" \
             -m "Release Apache Polaris Helm chart ${version_without_rc}"
 
+          exec_process svn mv --username "$SVN_USERNAME" --password "$SVN_PASSWORD" --non-interactive \
+            "${dev_python_url}" "${release_python_url}" \
+            -m "Release Apache Polaris Python CLI ${version_without_rc}"
+
           cat <<EOT >> $GITHUB_STEP_SUMMARY
           ## Distribution
-          Artifacts and Helm chart moved from dist dev to dist release
+          Artifacts, Helm chart, and Python CLI moved from dist dev to dist release
           EOT
 
       - name: Clean up old releases from dist release repository
@@ -258,6 +265,27 @@ jobs:
           else
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "No old Helm chart versions found to remove" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # List and remove old Python CLI versions
+          release_python_url="${APACHE_DIST_URL}/release/polaris/python-cli"
+          old_python_versions=$(svn list --username "$SVN_USERNAME" --password "$SVN_PASSWORD" --non-interactive "${release_python_url}" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-incubating)?/$' | sed 's|/$||' | grep -v "^${version_without_rc}$" || true)
+
+          if [[ -n "${old_python_versions}" ]]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Removing old Python CLI versions:" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "${old_python_versions}" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+
+            for old_python_version in ${old_python_versions}; do
+              exec_process svn rm --username "$SVN_USERNAME" --password "$SVN_PASSWORD" --non-interactive \
+                "${release_python_url}/${old_python_version}" \
+                -m "Remove old Python CLI ${old_python_version} (superseded by ${version_without_rc})"
+            done
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "No old Python CLI versions found to remove" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Transfer Helm index and artifacthub-repo.yml from dev to release
@@ -350,6 +378,42 @@ jobs:
           ✅ Polaris Server and Admin Tool Docker images published to Docker Hub
           EOT
 
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Install UV
+        run: pip install "uv>=0.9.0"
+
+      - name: Publish Python CLI to PyPI
+        # Requires the PYPI_TOKEN secret to be configured with a PyPI API token for apache-polaris
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
+          SVN_USERNAME: ${{ secrets.POLARIS_SVN_DEV_USERNAME }}
+          SVN_PASSWORD: ${{ secrets.POLARIS_SVN_DEV_PASSWORD }}
+        run: |
+          echo "::add-mask::$SVN_PASSWORD"
+
+          source "${LIBS_DIR}/_constants.sh"
+          source "${LIBS_DIR}/_exec.sh"
+
+          # Download Python CLI artifacts from SVN release space
+          python_artifacts_dir="${RELEASEY_DIR}/python-cli-artifacts"
+          release_python_url="${APACHE_DIST_URL}/release/polaris/python-cli/${version_without_rc}"
+
+          exec_process svn export --username "$SVN_USERNAME" --password "$SVN_PASSWORD" --non-interactive \
+            "${release_python_url}" "${python_artifacts_dir}"
+
+          # Publish only the distribution files (.whl and .tar.gz) to PyPI.
+          # Use explicit publish-url so uv does not need to resolve the index from pyproject.toml.
+          exec_process uv publish --publish-url https://upload.pypi.org/legacy/ "${python_artifacts_dir}"/*.whl "${python_artifacts_dir}"/*.tar.gz
+
+          cat <<EOT >> $GITHUB_STEP_SUMMARY
+          ## Python CLI PyPI
+          ✅ Python CLI published to PyPI as apache-polaris ${version_without_rc}
+          EOT
+
       - name: Create GitHub release with artifacts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -368,6 +432,7 @@ jobs:
           # Download artifacts from Apache dist release space
           release_artifacts_url="${APACHE_DIST_URL}/release/polaris/${version_without_rc}"
           release_helm_url="${APACHE_DIST_URL}/release/polaris/helm-chart/${version_without_rc}"
+          release_python_url="${APACHE_DIST_URL}/release/polaris/python-cli/${version_without_rc}"
 
           # Download main artifacts
           exec_process svn export --username "$SVN_USERNAME" --password "$SVN_PASSWORD" --non-interactive \
@@ -376,6 +441,10 @@ jobs:
           # Download Helm chart artifacts
           exec_process svn export --username "$SVN_USERNAME" --password "$SVN_PASSWORD" --non-interactive \
             "${release_helm_url}" "${artifacts_dir}/helm"
+
+          # Download Python CLI artifacts
+          exec_process svn export --username "$SVN_USERNAME" --password "$SVN_PASSWORD" --non-interactive \
+            "${release_python_url}" "${artifacts_dir}/python-cli"
 
           # Prepare the content of the Github Release
           # ********************************************************************************
@@ -386,6 +455,7 @@ jobs:
           This release includes:
           - Source and binary distributions
           - Helm chart package
+          - Python CLI (apache-polaris) published to PyPI
           - Docker images published to Docker Hub
           - Maven artifacts published to Maven Central
 
@@ -398,7 +468,7 @@ jobs:
           # ********************************************************************************
 
           # Collect all artifacts to attach from the artifacts directory
-          readarray -t artifacts_to_attach < <(find "${artifacts_dir}" -type f -name "*.tar.gz" -o -name "*.tgz" -o -name "*.asc" -o -name "*.sha512" -o -name "*.prov")
+          readarray -t artifacts_to_attach < <(find "${artifacts_dir}" -type f -name "*.tar.gz" -o -name "*.tgz" -o -name "*.whl" -o -name "*.asc" -o -name "*.sha512" -o -name "*.prov")
 
           # Create GitHub release and immediately publish it
           exec_process gh release create \
@@ -431,10 +501,12 @@ jobs:
           | --- | --- |
           | Distribution artifacts | ✅ Moved to release space |
           | Helm chart and index | ✅ Updated in release space |
+          | Python CLI artifacts | ✅ Moved to release space |
           | Old releases cleanup | ✅ Removed from dist release |
           | Git release tag | ✅ Created and pushed |
           | GitHub release | ✅ Created with artifacts attached |
           | Docker images | ✅ Published to Docker Hub |
+          | Python CLI (PyPI) | ✅ Published to PyPI |
           | Nexus repository | ✅ Released |
           | Version | \`${version_without_rc}\` |
           | Final release tag | \`${final_release_tag}\` |

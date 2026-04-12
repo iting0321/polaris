@@ -206,9 +206,20 @@ jobs:
             echo "⚠️ Helm chart directory not found at ${dev_helm_url}" >> $GITHUB_STEP_SUMMARY
           fi
 
+          # Check if Python CLI directory exists and delete it
+          dev_python_url="${APACHE_DIST_URL}/dev/polaris/python-cli/${version_without_rc}"
+          if svn ls --username "$SVN_USERNAME" --password "$SVN_PASSWORD" --non-interactive "${dev_python_url}" >/dev/null 2>&1; then
+            exec_process svn rm --username "$SVN_USERNAME" --password "$SVN_PASSWORD" --non-interactive \
+              "${dev_python_url}" \
+              -m "Cancel Apache Polaris Python CLI ${version_without_rc} RC${rc_number}"
+            echo "✅ Deleted Python CLI from ${dev_python_url}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Python CLI directory not found at ${dev_python_url}" >> $GITHUB_STEP_SUMMARY
+          fi
+
           cat <<EOT >> $GITHUB_STEP_SUMMARY
           ## Distribution Cleanup
-          Artifacts and Helm chart removed from dist dev repository
+          Artifacts, Helm chart, and Python CLI removed from dist dev repository
           EOT
 
       - name: Generate vote failure email
@@ -243,5 +254,6 @@ jobs:
           | Nexus staging repository | ✅ Dropped |
           | Distribution artifacts (dist dev) | ✅ Deleted |
           | Helm chart (dist dev) | ✅ Deleted |
+          | Python CLI (dist dev) | ✅ Deleted |
           EOT
 

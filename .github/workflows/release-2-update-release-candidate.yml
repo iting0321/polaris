@@ -173,14 +173,15 @@ jobs:
           source "${LIBS_DIR}/_constants.sh"
           source "${LIBS_DIR}/_exec.sh"
 
-          # Commit version files, changelog, and Helm chart updates
+          # Commit version files, changelog, Helm chart, and Python CLI updates
           exec_process git add \
             "$VERSION_FILE" \
             "$HELM_CHART_YAML_FILE" \
             "$HELM_README_FILE" \
             "$HELM_VALUES_FILE" \
             "$HELM_VALUES_SCHEMA_FILE" \
-            "$CHANGELOG_FILE"
+            "$CHANGELOG_FILE" \
+            "$PYTHON_CLIENT_PYPROJECT"
           exec_process git commit -m "[chore] Bump version to ${version_without_rc}"
 
           # Push the changes

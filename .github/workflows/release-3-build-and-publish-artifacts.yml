@@ -514,10 +514,123 @@ jobs:
           | Artifact Hub metadata | ✅ Committed to dist dev |
           EOT
 
+  build-and-stage-python-cli:
+    name: Build and Stage Python CLI
+    runs-on: ubuntu-latest
+    needs: [prerequisite-checks]
+    permissions:
+      contents: read
+    env:
+      DRY_RUN: ${{ needs.prerequisite-checks.outputs.dry_run }}
+      git_tag: ${{ needs.prerequisite-checks.outputs.git_tag }}
+      version_without_rc: ${{ needs.prerequisite-checks.outputs.version_without_rc }}
+      rc_number: ${{ needs.prerequisite-checks.outputs.rc_number }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup test environment
+        uses: ./.github/actions/setup-test-env
+
+      - name: Set up environment variables
+        run: |
+          echo "RELEASEY_DIR=$(pwd)/releasey" >> $GITHUB_ENV
+          echo "LIBS_DIR=$(pwd)/releasey/libs" >> $GITHUB_ENV
+
+      - name: Set up Java
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Install UV
+        run: pip install "uv>=0.9.0"
+
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@e89d40939c28e39f97cf32126055eeae86ba74ec # v6.3.0
+        with:
+          gpg_private_key: ${{ secrets.POLARIS_GPG_PRIVATE_KEY }}
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+
+      - name: Install Subversion
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y subversion
+
+      - name: Build, sign, and checksum Python CLI artifacts
+        run: |
+          source "${LIBS_DIR}/_exec.sh"
+
+          # Build sdist and wheel from the Python client directory
+          exec_process cd client/python
+          exec_process uv build
+
+          # Sign and checksum all built artifacts
+          for file in dist/*.whl dist/*.tar.gz; do
+            [ -f "$file" ] || continue
+            calculate_sha512 "$file"
+            exec_process gpg --armor --output "${file}.asc" --detach-sig "$file"
+          done
+
+          cat <<EOT >> $GITHUB_STEP_SUMMARY
+          ## Python CLI Build
+          Python CLI distributions built, signed, and checksummed successfully
+          EOT
+
+      - name: Stage Python CLI to Apache dist dev repository
+        env:
+          SVN_USERNAME: ${{ secrets.POLARIS_SVN_DEV_USERNAME }}
+          SVN_PASSWORD: ${{ secrets.POLARIS_SVN_DEV_PASSWORD }}
+        run: |
+          echo "::add-mask::$SVN_PASSWORD"
+
+          source "${LIBS_DIR}/_constants.sh"
+          source "${LIBS_DIR}/_exec.sh"
+
+          dist_dev_dir=${RELEASEY_DIR}/polaris-dist-dev
+
+          # Retry logic for SVN checkout (Apache SVN can have transient connectivity issues)
+          exec_process_with_retries 5 60 "${dist_dev_dir}" svn checkout --username "$SVN_USERNAME" --password "$SVN_PASSWORD" --non-interactive "${APACHE_DIST_URL}${APACHE_DIST_PATH}" "${dist_dev_dir}"
+
+          python_version_dir="${dist_dev_dir}/python-cli/${version_without_rc}"
+
+          # If the python-cli version directory already exists in SVN (e.g. re-running the workflow),
+          # delete it so we can re-add fresh artifacts without "already versioned" errors.
+          if svn info "${python_version_dir}" &>/dev/null 2>&1; then
+            exec_process svn delete "${python_version_dir}"
+          fi
+
+          exec_process mkdir -p "${python_version_dir}"
+          exec_process cp client/python/dist/* "${python_version_dir}/"
+
+          exec_process cd "${dist_dev_dir}"
+          exec_process svn add --parents "python-cli/${version_without_rc}"
+
+          exec_process svn commit --username "$SVN_USERNAME" --password "$SVN_PASSWORD" --non-interactive -m "Stage Apache Polaris Python CLI ${version_without_rc} RC${rc_number}"
+
+          cat <<EOT >> $GITHUB_STEP_SUMMARY
+          ## Python CLI Staging to dist dev
+          🎉 Python CLI staged successfully:
+
+          | Component | Status |
+          | --- | --- |
+          | Python CLI sdist and wheel | ✅ Built and signed |
+          | Apache dist dev repository | ✅ Staged at python-cli/${version_without_rc} |
+          EOT
+
   generate-release-email:
     name: Generate Release Email Body
     runs-on: ubuntu-latest
-    needs: [prerequisite-checks, build-and-publish-artifacts, build-docker, build-and-stage-helm-chart]
+    needs: [prerequisite-checks, build-and-publish-artifacts, build-docker, build-and-stage-helm-chart, build-and-stage-python-cli]
     permissions:
       contents: read
     env:
@@ -570,6 +683,9 @@ jobs:
           * https://dist.apache.org/repos/dist/dev/polaris/helm-chart/${version_without_rc}
 
           NB: you have to build the Docker images locally in order to test Helm charts.
+
+          Python CLI artifacts are available on:
+          * https://dist.apache.org/repos/dist/dev/polaris/python-cli/${version_without_rc}
 
           You can find the KEYS file here:
           * https://downloads.apache.org/polaris/KEYS
