@@ -31,6 +31,8 @@ import jakarta.ws.rs.core.SecurityContext;
 import java.util.List;
 import org.apache.iceberg.TableMetadata;
 import org.apache.iceberg.catalog.Namespace;
+import org.apache.iceberg.catalog.TableIdentifier;
+import org.apache.iceberg.rest.RESTUtil;
 import org.apache.iceberg.rest.requests.CommitTransactionRequest;
 import org.apache.iceberg.rest.requests.CreateNamespaceRequest;
 import org.apache.iceberg.rest.requests.CreateTableRequest;
@@ -494,6 +496,7 @@ public class IcebergRestCatalogEventServiceDelegator
       SecurityContext securityContext) {
     String catalogName = prefixParser.prefixToCatalogName(prefix);
     Namespace namespaceObj = decodeNamespace(namespace);
+    String decodedTableName = RESTUtil.decodeString(table);
     polarisEventDispatcher.dispatch(
         new PolarisEvent(
             PolarisEventType.BEFORE_UPDATE_TABLE,
@@ -501,7 +504,10 @@ public class IcebergRestCatalogEventServiceDelegator
             new EventAttributeMap()
                 .put(EventAttributes.CATALOG_NAME, catalogName)
                 .put(EventAttributes.NAMESPACE, namespaceObj)
-                .put(EventAttributes.TABLE_NAME, table)
+                .put(EventAttributes.TABLE_NAME, decodedTableName)
+                .put(
+                    EventAttributes.TABLE_IDENTIFIER,
+                    TableIdentifier.of(namespaceObj, decodedTableName))
                 .put(EventAttributes.UPDATE_TABLE_REQUEST, commitTableRequest)));
     Response resp =
         delegate.updateTable(
@@ -513,7 +519,10 @@ public class IcebergRestCatalogEventServiceDelegator
             new EventAttributeMap()
                 .put(EventAttributes.CATALOG_NAME, catalogName)
                 .put(EventAttributes.NAMESPACE, namespaceObj)
-                .put(EventAttributes.TABLE_NAME, table)
+                .put(EventAttributes.TABLE_NAME, decodedTableName)
+                .put(
+                    EventAttributes.TABLE_IDENTIFIER,
+                    TableIdentifier.of(namespaceObj, decodedTableName))
                 .put(EventAttributes.UPDATE_TABLE_REQUEST, commitTableRequest)
                 .put(
                     EventAttributes.TABLE_METADATA,
@@ -782,6 +791,7 @@ public class IcebergRestCatalogEventServiceDelegator
                   .put(EventAttributes.CATALOG_NAME, catalogName)
                   .put(EventAttributes.NAMESPACE, req.identifier().namespace())
                   .put(EventAttributes.TABLE_NAME, req.identifier().name())
+                  .put(EventAttributes.TABLE_IDENTIFIER, req.identifier())
                   .put(EventAttributes.UPDATE_TABLE_REQUEST, req)));
     }
     Response resp =
@@ -809,6 +819,7 @@ public class IcebergRestCatalogEventServiceDelegator
                   .put(EventAttributes.CATALOG_NAME, catalogName)
                   .put(EventAttributes.NAMESPACE, req.identifier().namespace())
                   .put(EventAttributes.TABLE_NAME, req.identifier().name())
+                  .put(EventAttributes.TABLE_IDENTIFIER, req.identifier())
                   .put(EventAttributes.UPDATE_TABLE_REQUEST, req)
                   .put(EventAttributes.TABLE_METADATA, tableMetadata)));
     }

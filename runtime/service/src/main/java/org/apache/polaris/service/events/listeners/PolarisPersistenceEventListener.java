@@ -20,6 +20,8 @@
 package org.apache.polaris.service.events.listeners;
 
 import com.google.common.collect.ImmutableMap;
+import jakarta.inject.Inject;
+import java.net.URI;
 import java.util.Map;
 import org.apache.iceberg.TableMetadata;
 import org.apache.iceberg.TableMetadataParser;
@@ -30,19 +32,54 @@ import org.apache.polaris.core.admin.model.Catalog;
 import org.apache.polaris.core.auth.PolarisPrincipal;
 import org.apache.polaris.service.events.EventAttributes;
 import org.apache.polaris.service.events.PolarisEvent;
+import org.apache.polaris.service.events.openlineage.IcebergOpenLineageMapper;
+import org.apache.polaris.service.events.openlineage.OpenLineageConfiguration;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public abstract class PolarisPersistenceEventListener implements PolarisEventListener {
+  private static final Logger LOGGER =
+      LoggerFactory.getLogger(PolarisPersistenceEventListener.class);
+
+  /**
+   * Injected by CDI when running inside the Quarkus container. May be {@code null} in plain unit
+   * tests (where CDI is not active); in that case {@link #isOpenLineageEnabled()} defaults to
+   * {@code true} and the producer URI falls back to a default value.
+   */
+  @Inject OpenLineageConfiguration openLineageConfig;
+
+  // ---------- PolarisEventListener ----------
 
   @Override
   public void onEvent(PolarisEvent event) {
     switch (event.type()) {
       case AFTER_CREATE_TABLE -> handleAfterCreateTable(event);
+      case AFTER_UPDATE_TABLE -> handleAfterUpdateTable(event);
+      case AFTER_DROP_TABLE -> handleAfterDropTable(event);
       case AFTER_CREATE_CATALOG -> handleAfterCreateCatalog(event);
       default -> {
         // Other events not handled by this listener
       }
     }
   }
+
+  // ---------- testability hooks ----------
+
+  /** Returns {@code true} when OpenLineage facets should be generated and stored. */
+  protected boolean isOpenLineageEnabled() {
+    // null → CDI not active (plain unit test) → enable by default
+    return openLineageConfig == null || openLineageConfig.enabled();
+  }
+
+  /** Returns the producer URI to embed in every OpenLineage facet. */
+  protected URI openLineageProducerUri() {
+    if (openLineageConfig == null) {
+      return URI.create("https://github.com/apache/polaris");
+    }
+    return URI.create(openLineageConfig.producer());
+  }
+
+  // ---------- event handlers ----------
 
   private void handleAfterCreateTable(PolarisEvent event) {
     LoadTableResponse loadTableResponse =
@@ -51,6 +88,7 @@ public abstract class PolarisPersistenceEventListener implements PolarisEventLis
     String catalogName = event.attributes().getRequired(EventAttributes.CATALOG_NAME);
     Namespace namespace = event.attributes().getRequired(EventAttributes.NAMESPACE);
     String tableName = event.attributes().getRequired(EventAttributes.TABLE_NAME);
+    TableIdentifier tableIdentifier = TableIdentifier.of(namespace, tableName);
 
     org.apache.polaris.core.entity.PolarisEvent polarisEvent =
         new org.apache.polaris.core.entity.PolarisEvent(
@@ -61,11 +99,96 @@ public abstract class PolarisPersistenceEventListener implements PolarisEventLis
             event.metadata().timestamp().toEpochMilli(),
             event.metadata().user().map(PolarisPrincipal::getName).orElse(null),
             org.apache.polaris.core.entity.PolarisEvent.ResourceType.TABLE,
-            TableIdentifier.of(namespace, tableName).toString());
+            tableIdentifier.toString());
+
     var additionalParameters =
         ImmutableMap.<String, String>builder()
             .put("table-uuid", tableMetadata.uuid())
             .put("metadata", TableMetadataParser.toJson(tableMetadata));
+
+    if (isOpenLineageEnabled()) {
+      try {
+        additionalParameters.put(
+            "openlineage",
+            IcebergOpenLineageMapper.toDatasetEventJson(
+                openLineageProducerUri(), tableIdentifier, tableMetadata));
+      } catch (RuntimeException e) {
+        LOGGER.warn("Failed to serialize OpenLineage payload for table {}", tableIdentifier, e);
+      }
+    }
+
+    additionalParameters.putAll(event.metadata().openTelemetryContext());
+    polarisEvent.setAdditionalProperties(additionalParameters.build());
+    processEvent(event.metadata().realmId(), polarisEvent);
+  }
+
+  private void handleAfterUpdateTable(PolarisEvent event) {
+    String catalogName = event.attributes().getRequired(EventAttributes.CATALOG_NAME);
+    TableIdentifier tableIdentifier = resolveTableIdentifier(event);
+
+    org.apache.polaris.core.entity.PolarisEvent polarisEvent =
+        new org.apache.polaris.core.entity.PolarisEvent(
+            catalogName,
+            event.metadata().eventId().toString(),
+            event.metadata().requestId().orElse(null),
+            event.type().name(),
+            event.metadata().timestamp().toEpochMilli(),
+            event.metadata().user().map(PolarisPrincipal::getName).orElse(null),
+            org.apache.polaris.core.entity.PolarisEvent.ResourceType.TABLE,
+            tableIdentifier.toString());
+
+    TableMetadata tableMetadata = event.attributes().getRequired(EventAttributes.TABLE_METADATA);
+    var additionalParameters = ImmutableMap.<String, String>builder();
+    if (tableMetadata != null) {
+      additionalParameters.put("table-uuid", tableMetadata.uuid());
+      additionalParameters.put("metadata", TableMetadataParser.toJson(tableMetadata));
+
+      if (isOpenLineageEnabled()) {
+        try {
+          additionalParameters.put(
+              "openlineage",
+              IcebergOpenLineageMapper.toDatasetEventJson(
+                  openLineageProducerUri(), tableIdentifier, tableMetadata));
+        } catch (RuntimeException e) {
+          LOGGER.warn("Failed to serialize OpenLineage payload for table {}", tableIdentifier, e);
+        }
+      }
+    }
+
+    additionalParameters.putAll(event.metadata().openTelemetryContext());
+    polarisEvent.setAdditionalProperties(additionalParameters.build());
+    processEvent(event.metadata().realmId(), polarisEvent);
+  }
+
+  private void handleAfterDropTable(PolarisEvent event) {
+    String catalogName = event.attributes().getRequired(EventAttributes.CATALOG_NAME);
+    Namespace namespace = event.attributes().getRequired(EventAttributes.NAMESPACE);
+    String tableName = event.attributes().getRequired(EventAttributes.TABLE_NAME);
+    TableIdentifier tableIdentifier = TableIdentifier.of(namespace, tableName);
+
+    org.apache.polaris.core.entity.PolarisEvent polarisEvent =
+        new org.apache.polaris.core.entity.PolarisEvent(
+            catalogName,
+            event.metadata().eventId().toString(),
+            event.metadata().requestId().orElse(null),
+            event.type().name(),
+            event.metadata().timestamp().toEpochMilli(),
+            event.metadata().user().map(PolarisPrincipal::getName).orElse(null),
+            org.apache.polaris.core.entity.PolarisEvent.ResourceType.TABLE,
+            tableIdentifier.toString());
+
+    var additionalParameters = ImmutableMap.<String, String>builder();
+    if (isOpenLineageEnabled()) {
+      try {
+        additionalParameters.put(
+            "openlineage",
+            IcebergOpenLineageMapper.toDropDatasetEventJson(
+                openLineageProducerUri(), tableIdentifier));
+      } catch (RuntimeException e) {
+        LOGGER.warn("Failed to serialize OpenLineage payload for table {}", tableIdentifier, e);
+      }
+    }
+
     additionalParameters.putAll(event.metadata().openTelemetryContext());
     polarisEvent.setAdditionalProperties(additionalParameters.build());
     processEvent(event.metadata().realmId(), polarisEvent);
@@ -88,6 +211,20 @@ public abstract class PolarisPersistenceEventListener implements PolarisEventLis
       polarisEvent.setAdditionalProperties(openTelemetryContext);
     }
     processEvent(event.metadata().realmId(), polarisEvent);
+  }
+
+  // ---------- helpers ----------
+
+  private static TableIdentifier resolveTableIdentifier(PolarisEvent event) {
+    return event
+        .attributes()
+        .get(EventAttributes.TABLE_IDENTIFIER)
+        .orElseGet(
+            () -> {
+              Namespace namespace = event.attributes().getRequired(EventAttributes.NAMESPACE);
+              String tableName = event.attributes().getRequired(EventAttributes.TABLE_NAME);
+              return TableIdentifier.of(namespace, tableName);
+            });
   }
 
   protected abstract void processEvent(

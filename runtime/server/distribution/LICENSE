@@ -432,6 +432,7 @@ License: Eclipse Public License 2.0 - https://projects.eclipse.org/license/epl-2
 
 This product bundles JBoss Logging.
 
+
 * Maven group:artifact IDs: org.jboss.logging:jboss-logging
 * Maven group:artifact IDs: org.jboss.logmanager:jboss-logmanager
 
@@ -1147,6 +1148,16 @@ This product bundles OpenTelemetry Semconv.
 * Maven group:artifact IDs: io.opentelemetry.semconv:opentelemetry-semconv-incubating
 
 Project URL: https://github.com/open-telemetry/semantic-conventions-java
+License: Apache License 2.0 - https://www.apache.org/licenses/LICENSE-2.0.txt
+
+--------------------------------------------------------------------------------
+
+This product bundles OpenLineage.
+
+
+* Maven group:artifact IDs: io.openlineage:openlineage-java
+
+Project URL: https://openlineage.io/
 License: Apache License 2.0 - https://www.apache.org/licenses/LICENSE-2.0.txt
 
 --------------------------------------------------------------------------------

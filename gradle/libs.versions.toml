@@ -27,6 +27,7 @@ picocli = "4.7.7"
 quarkus = "3.32.4"
 scala212 = "2.12.19"
 swagger = "1.6.16"
+openlineage = "1.22.0"
 
 [bundles]
 
@@ -81,6 +82,7 @@ keycloak-admin-client = { module = "org.keycloak:keycloak-admin-client", version
 logback-classic = { module = "ch.qos.logback:logback-classic", version = "1.5.32" }
 micrometer-bom = { module = "io.micrometer:micrometer-bom", version = "1.16.5" }
 microprofile-fault-tolerance-api = { module = "org.eclipse.microprofile.fault-tolerance:microprofile-fault-tolerance-api", version = "4.1.2" }
+openlineage-java = { module = "io.openlineage:openlineage-java", version.ref = "openlineage" }
 mockito-core = { module = "org.mockito:mockito-core", version = "5.23.0" }
 mockito-junit-jupiter = { module = "org.mockito:mockito-junit-jupiter", version = "5.23.0" }
 mongodb-driver-sync = { module = "org.mongodb:mongodb-driver-sync", version = "5.6.5" }
