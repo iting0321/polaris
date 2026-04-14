@@ -23,8 +23,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.openlineage.client.OpenLineage;
 import io.openlineage.client.OpenLineageClientUtils;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.List;
+import java.util.Locale;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import org.apache.iceberg.DataOperations;
 import org.apache.iceberg.Schema;
@@ -32,19 +37,14 @@ import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.TableMetadata;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.types.Types;
+import org.apache.polaris.service.events.PolarisEventType;
 
 /**
- * Maps Iceberg table metadata to OpenLineage dataset objects using the OpenLineage Java SDK.
+ * Maps Iceberg table mutations to OpenLineage run events.
  *
- * <p>Emits standalone {@code DatasetEvent}s (Static Datasets) appropriate for a Catalog. *
- *
- * <p>Facets emitted per event type:
- *
- * <ul>
- *   <li><b>CREATE / UPDATE</b> — dataset {@code schema}, and when a snapshot exists: {@code
- *       lifecycleStateChange} and {@code version}.
- *   <li><b>DROP</b> — dataset {@code lifecycleStateChange} (value: {@code DROP}).
- * </ul>
+ * <p>Marquez's UI is job-centric. Emitting synthetic Polaris jobs with dataset inputs/outputs makes
+ * table create/update/drop activity visible in the graph, while preserving the useful dataset
+ * facets such as schema, datasource, lifecycle state, and version.
  */
 public final class IcebergOpenLineageMapper {
 
@@ -52,46 +52,51 @@ public final class IcebergOpenLineageMapper {
 
   private IcebergOpenLineageMapper() {}
 
-  // ---------- public API ----------
-
-  /**
-   * Generates a complete OpenLineage DatasetEvent (including the Event envelope) representing the
-   * current static state of the Iceberg table.
-   */
-  public static String toDatasetEventJson(
-      URI producerUri, TableIdentifier tableIdentifier, TableMetadata tableMetadata) {
+  public static String toTableRunEventJson(
+      URI producerUri,
+      String catalogName,
+      String realmId,
+      PolarisEventType eventType,
+      String requestId,
+      Instant eventTime,
+      TableIdentifier tableIdentifier,
+      TableMetadata tableMetadata) {
     OpenLineage ol = new OpenLineage(producerUri);
-
-    // 1. Build Core Facets
-    OpenLineage.DatasetFacetsBuilder facetsBuilder =
-        ol.newDatasetFacetsBuilder().schema(buildSchemaFacet(ol, tableMetadata.schema()));
-
+    OpenLineage.DatasetFacets datasetFacets = buildDatasetFacets(ol, tableIdentifier, tableMetadata);
     Snapshot snapshot = tableMetadata.currentSnapshot();
-    if (snapshot != null) {
-      addSnapshotFacets(ol, facetsBuilder, tableMetadata, snapshot);
-    }
 
-    // 2. Build StaticDataset (DatasetEvent strictly requires a StaticDataset)
-    OpenLineage.StaticDataset dataset =
-        ol.newStaticDatasetBuilder()
-            .namespace(tableIdentifier.namespace().toString())
-            .name(tableIdentifier.name())
-            .facets(facetsBuilder.build())
+    List<OpenLineage.InputDataset> inputs =
+        eventType == PolarisEventType.AFTER_UPDATE_TABLE
+            ? List.of(buildInputDataset(ol, tableIdentifier, datasetFacets))
+            : List.of();
+
+    List<OpenLineage.OutputDataset> outputs =
+        List.of(buildOutputDataset(ol, tableIdentifier, datasetFacets, snapshot));
+
+    OpenLineage.RunEvent event =
+        ol.newRunEventBuilder()
+            .eventTime(toZonedDateTime(eventTime))
+            .eventType(OpenLineage.RunEvent.EventType.COMPLETE)
+            .run(buildRun(ol, requestId, eventTime))
+            .job(buildJob(ol, catalogName, realmId, eventType, tableIdentifier))
+            .inputs(inputs)
+            .outputs(outputs)
             .build();
-
-    // 3. Wrap into a complete DatasetEvent
-    OpenLineage.DatasetEvent event =
-        ol.newDatasetEventBuilder().eventTime(ZonedDateTime.now()).dataset(dataset).build();
 
     return serialize(event);
   }
 
-  /** Generates a complete OpenLineage DatasetEvent representing a DROP operation. */
-  public static String toDropDatasetEventJson(URI producerUri, TableIdentifier tableIdentifier) {
+  public static String toDropRunEventJson(
+      URI producerUri,
+      String catalogName,
+      String realmId,
+      String requestId,
+      Instant eventTime,
+      TableIdentifier tableIdentifier) {
     OpenLineage ol = new OpenLineage(producerUri);
-
     OpenLineage.DatasetFacets facets =
         ol.newDatasetFacetsBuilder()
+            .dataSource(buildDatasourceFacet(ol, tableIdentifier, null))
             .lifecycleStateChange(
                 ol.newLifecycleStateChangeDatasetFacetBuilder()
                     .lifecycleStateChange(
@@ -99,20 +104,133 @@ public final class IcebergOpenLineageMapper {
                     .build())
             .build();
 
-    OpenLineage.StaticDataset dataset =
-        ol.newStaticDatasetBuilder()
-            .namespace(tableIdentifier.namespace().toString())
-            .name(tableIdentifier.name())
-            .facets(facets)
+    OpenLineage.RunEvent event =
+        ol.newRunEventBuilder()
+            .eventTime(toZonedDateTime(eventTime))
+            .eventType(OpenLineage.RunEvent.EventType.COMPLETE)
+            .run(buildRun(ol, requestId, eventTime))
+            .job(
+                buildJob(
+                    ol, catalogName, realmId, PolarisEventType.AFTER_DROP_TABLE, tableIdentifier))
+            .inputs(List.of(buildInputDataset(ol, tableIdentifier, facets)))
+            .outputs(List.of())
             .build();
-
-    OpenLineage.DatasetEvent event =
-        ol.newDatasetEventBuilder().eventTime(ZonedDateTime.now()).dataset(dataset).build();
 
     return serialize(event);
   }
 
-  // ---------- facet helpers ----------
+  private static OpenLineage.Run buildRun(OpenLineage ol, String requestId, Instant eventTime) {
+    return ol.newRunBuilder()
+        .runId(stableRunId(requestId, eventTime))
+        .facets(
+            ol.newRunFacetsBuilder()
+                .processing_engine(
+                    ol.newProcessingEngineRunFacetBuilder()
+                        .name("polaris")
+                        .openlineageAdapterVersion("1.0")
+                        .build())
+                .build())
+        .build();
+  }
+
+  private static UUID stableRunId(String requestId, Instant eventTime) {
+    String source = requestId == null || requestId.isBlank() ? eventTime.toString() : requestId;
+    return UUID.nameUUIDFromBytes(source.getBytes(StandardCharsets.UTF_8));
+  }
+
+  private static OpenLineage.Job buildJob(
+      OpenLineage ol,
+      String catalogName,
+      String realmId,
+      PolarisEventType eventType,
+      TableIdentifier tableIdentifier) {
+    return ol.newJobBuilder()
+        .namespace("polaris." + realmId + "." + catalogName)
+        .name(eventType.name().toLowerCase(Locale.ROOT) + ":" + tableIdentifier)
+        .facets(
+            ol.newJobFacetsBuilder()
+                .jobType(
+                    ol.newJobTypeJobFacetBuilder()
+                        .processingType("BATCH")
+                        .integration("POLARIS")
+                        .jobType("COMMAND")
+                        .build())
+                .documentation(
+                    ol.newDocumentationJobFacetBuilder()
+                        .description(
+                            "Synthetic Polaris lineage job for "
+                                + eventType.name()
+                                + " on "
+                                + tableIdentifier)
+                        .build())
+                .build())
+        .build();
+  }
+
+  private static OpenLineage.DatasetFacets buildDatasetFacets(
+      OpenLineage ol, TableIdentifier tableIdentifier, TableMetadata tableMetadata) {
+    OpenLineage.DatasetFacetsBuilder facetsBuilder =
+        ol.newDatasetFacetsBuilder()
+            .schema(buildSchemaFacet(ol, tableMetadata.schema()))
+            .dataSource(buildDatasourceFacet(ol, tableIdentifier, tableMetadata));
+
+    Snapshot snapshot = tableMetadata.currentSnapshot();
+    if (snapshot != null) {
+      addSnapshotFacets(ol, facetsBuilder, tableMetadata, snapshot);
+    }
+    return facetsBuilder.build();
+  }
+
+  private static OpenLineage.InputDataset buildInputDataset(
+      OpenLineage ol, TableIdentifier tableIdentifier, OpenLineage.DatasetFacets facets) {
+    return ol.newInputDatasetBuilder()
+        .namespace(tableIdentifier.namespace().toString())
+        .name(tableIdentifier.name())
+        .facets(facets)
+        .build();
+  }
+
+  private static OpenLineage.OutputDataset buildOutputDataset(
+      OpenLineage ol,
+      TableIdentifier tableIdentifier,
+      OpenLineage.DatasetFacets facets,
+      Snapshot snapshot) {
+    OpenLineage.OutputDatasetBuilder builder =
+        ol.newOutputDatasetBuilder()
+            .namespace(tableIdentifier.namespace().toString())
+            .name(tableIdentifier.name())
+            .facets(facets);
+
+    if (snapshot != null) {
+      builder.outputFacets(
+          ol.newOutputDatasetOutputFacetsBuilder()
+              .outputStatistics(
+                  ol.newOutputStatisticsOutputDatasetFacetBuilder()
+                      .rowCount(summaryLong(snapshot, "total-records"))
+                      .size(summaryLong(snapshot, "total-file-size"))
+                      .build())
+              .build());
+    }
+
+    return builder.build();
+  }
+
+  private static OpenLineage.DatasourceDatasetFacet buildDatasourceFacet(
+      OpenLineage ol, TableIdentifier tableIdentifier, TableMetadata tableMetadata) {
+    URI uri =
+        tableMetadata != null && tableMetadata.location() != null
+            ? URI.create(tableMetadata.location())
+            : URI.create(
+                "urn:polaris:"
+                    + tableIdentifier.namespace()
+                    + "."
+                    + tableIdentifier.name());
+
+    return ol.newDatasourceDatasetFacetBuilder()
+        .name(uri.getScheme() == null ? "polaris" : uri.getScheme())
+        .uri(uri)
+        .build();
+  }
 
   private static OpenLineage.SchemaDatasetFacet buildSchemaFacet(OpenLineage ol, Schema schema) {
     List<OpenLineage.SchemaDatasetFacetFields> fields =
@@ -122,12 +240,12 @@ public final class IcebergOpenLineageMapper {
 
   private static OpenLineage.SchemaDatasetFacetFields buildField(
       OpenLineage ol, Types.NestedField col) {
-    OpenLineage.SchemaDatasetFacetFieldsBuilder b =
+    OpenLineage.SchemaDatasetFacetFieldsBuilder builder =
         ol.newSchemaDatasetFacetFieldsBuilder().name(col.name()).type(col.type().toString());
     if (col.doc() != null) {
-      b.description(col.doc());
+      builder.description(col.doc());
     }
-    return b.build();
+    return builder.build();
   }
 
   private static void addSnapshotFacets(
@@ -135,7 +253,6 @@ public final class IcebergOpenLineageMapper {
       OpenLineage.DatasetFacetsBuilder facetsBuilder,
       TableMetadata metadata,
       Snapshot snapshot) {
-
     facetsBuilder
         .version(
             ol.newDatasetVersionDatasetFacetBuilder()
@@ -149,8 +266,6 @@ public final class IcebergOpenLineageMapper {
 
   private static OpenLineage.LifecycleStateChangeDatasetFacet.LifecycleStateChange
       mapLifecycleState(TableMetadata metadata, Snapshot snapshot) {
-
-    // If this is the very first snapshot of the table, it represents a CREATE event.
     if (metadata.snapshots().size() == 1) {
       return OpenLineage.LifecycleStateChangeDatasetFacet.LifecycleStateChange.CREATE;
     }
@@ -160,16 +275,31 @@ public final class IcebergOpenLineageMapper {
       return OpenLineage.LifecycleStateChangeDatasetFacet.LifecycleStateChange.OVERWRITE;
     }
 
-    // All other operations (e.g., Append, Delete) are categorized as table alterations (ALTER).
     return OpenLineage.LifecycleStateChangeDatasetFacet.LifecycleStateChange.ALTER;
+  }
+
+  private static Long summaryLong(Snapshot snapshot, String key) {
+    if (snapshot.summary() == null) {
+      return null;
+    }
+    String value = snapshot.summary().get(key);
+    if (value == null || value.isBlank()) {
+      return null;
+    }
+    try {
+      return Long.parseLong(value);
+    } catch (NumberFormatException e) {
+      return null;
+    }
+  }
+
+  private static ZonedDateTime toZonedDateTime(Instant eventTime) {
+    return ZonedDateTime.ofInstant(eventTime, ZoneOffset.UTC);
   }
 
   private static String serialize(Object obj) {
     try {
-      com.fasterxml.jackson.databind.node.ObjectNode node =
-          (com.fasterxml.jackson.databind.node.ObjectNode) MAPPER.valueToTree(obj);
-      node.put("eventType", "DATASET");
-      return MAPPER.writeValueAsString(node);
+      return MAPPER.writeValueAsString(obj);
     } catch (Exception e) {
       throw new RuntimeException("Failed to serialize OpenLineage event", e);
     }

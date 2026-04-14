@@ -32,6 +32,7 @@ import org.apache.polaris.core.admin.model.Catalog;
 import org.apache.polaris.core.auth.PolarisPrincipal;
 import org.apache.polaris.service.events.EventAttributes;
 import org.apache.polaris.service.events.PolarisEvent;
+import org.apache.polaris.service.events.PolarisEventType;
 import org.apache.polaris.service.events.openlineage.IcebergOpenLineageMapper;
 import org.apache.polaris.service.events.openlineage.OpenLineageConfiguration;
 import org.slf4j.Logger;
@@ -110,8 +111,15 @@ public abstract class PolarisPersistenceEventListener implements PolarisEventLis
       try {
         additionalParameters.put(
             "openlineage",
-            IcebergOpenLineageMapper.toDatasetEventJson(
-                openLineageProducerUri(), tableIdentifier, tableMetadata));
+            IcebergOpenLineageMapper.toTableRunEventJson(
+                openLineageProducerUri(),
+                catalogName,
+                event.metadata().realmId(),
+                PolarisEventType.AFTER_CREATE_TABLE,
+                event.metadata().requestId().orElse(null),
+                event.metadata().timestamp(),
+                tableIdentifier,
+                tableMetadata));
       } catch (RuntimeException e) {
         LOGGER.warn("Failed to serialize OpenLineage payload for table {}", tableIdentifier, e);
       }
@@ -147,8 +155,15 @@ public abstract class PolarisPersistenceEventListener implements PolarisEventLis
         try {
           additionalParameters.put(
               "openlineage",
-              IcebergOpenLineageMapper.toDatasetEventJson(
-                  openLineageProducerUri(), tableIdentifier, tableMetadata));
+              IcebergOpenLineageMapper.toTableRunEventJson(
+                  openLineageProducerUri(),
+                  catalogName,
+                  event.metadata().realmId(),
+                  PolarisEventType.AFTER_UPDATE_TABLE,
+                  event.metadata().requestId().orElse(null),
+                  event.metadata().timestamp(),
+                  tableIdentifier,
+                  tableMetadata));
         } catch (RuntimeException e) {
           LOGGER.warn("Failed to serialize OpenLineage payload for table {}", tableIdentifier, e);
         }
@@ -182,8 +197,13 @@ public abstract class PolarisPersistenceEventListener implements PolarisEventLis
       try {
         additionalParameters.put(
             "openlineage",
-            IcebergOpenLineageMapper.toDropDatasetEventJson(
-                openLineageProducerUri(), tableIdentifier));
+            IcebergOpenLineageMapper.toDropRunEventJson(
+                openLineageProducerUri(),
+                catalogName,
+                event.metadata().realmId(),
+                event.metadata().requestId().orElse(null),
+                event.metadata().timestamp(),
+                tableIdentifier));
       } catch (RuntimeException e) {
         LOGGER.warn("Failed to serialize OpenLineage payload for table {}", tableIdentifier, e);
       }

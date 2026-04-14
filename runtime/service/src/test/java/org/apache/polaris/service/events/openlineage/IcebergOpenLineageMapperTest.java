@@ -22,8 +22,8 @@ package org.apache.polaris.service.events.openlineage;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
 import java.net.URI;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import org.apache.iceberg.DataFile;
@@ -35,6 +35,7 @@ import org.apache.iceberg.TableMetadata;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.io.FileIO;
 import org.apache.iceberg.types.Types;
+import org.apache.polaris.service.events.PolarisEventType;
 import org.junit.jupiter.api.Test;
 
 class IcebergOpenLineageMapperTest {
@@ -42,63 +43,7 @@ class IcebergOpenLineageMapperTest {
   private static final URI TEST_PRODUCER = URI.create("https://github.com/apache/polaris");
 
   @Test
-  void demo() throws Exception {
-    var prettyMapper = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
-
-    // --- Case 1: table with snapshot ---
-    Snapshot snapshot =
-        new StubSnapshot(
-            99L, "replace", Map.of("total-records", "500", "total-file-size", "10240"));
-    TableMetadata withSnapshot =
-        TableMetadata.buildFromEmpty()
-            .assignUUID("demo-uuid")
-            .setLocation("s3://warehouse/sales/orders")
-            .addSchema(
-                new Schema(
-                    List.of(
-                        Types.NestedField.required(1, "order_id", Types.LongType.get(), "PK"),
-                        Types.NestedField.optional(2, "customer", Types.StringType.get()),
-                        Types.NestedField.optional(
-                            3, "amount", Types.DecimalType.of(10, 2), "USD"))))
-            .addPartitionSpec(PartitionSpec.unpartitioned())
-            .addSortOrder(SortOrder.unsorted())
-            .setBranchSnapshot(snapshot, "main")
-            .build();
-
-    String json1 =
-        IcebergOpenLineageMapper.toDatasetEventJson(
-            TEST_PRODUCER, TableIdentifier.of("sales", "orders"), withSnapshot);
-    System.out.println(
-        "=== [Case 1] Table WITH snapshot (lifecycleStateChange=CREATE, first snapshot) ===");
-    System.out.println(prettyMapper.readTree(json1).toPrettyString());
-
-    // --- Case 2: freshly created table, no snapshot yet ---
-    TableMetadata noSnapshot =
-        TableMetadata.buildFromEmpty()
-            .assignUUID("new-uuid")
-            .setLocation("s3://warehouse/sales/events")
-            .addSchema(
-                new Schema(List.of(Types.NestedField.required(1, "id", Types.IntegerType.get()))))
-            .addPartitionSpec(PartitionSpec.unpartitioned())
-            .addSortOrder(SortOrder.unsorted())
-            .build();
-
-    String json2 =
-        IcebergOpenLineageMapper.toDatasetEventJson(
-            TEST_PRODUCER, TableIdentifier.of("sales", "events"), noSnapshot);
-    System.out.println("\n=== [Case 2] Table WITHOUT snapshot ===");
-    System.out.println(prettyMapper.readTree(json2).toPrettyString());
-
-    // --- Case 3: drop table ---
-    String json3 =
-        IcebergOpenLineageMapper.toDropDatasetEventJson(
-            TEST_PRODUCER, TableIdentifier.of("sales", "orders"));
-    System.out.println("\n=== [Case 3] DROP table ===");
-    System.out.println(prettyMapper.readTree(json3).toPrettyString());
-  }
-
-  @Test
-  void mapsSchemaAndSnapshotFacets() throws Exception {
+  void createRunEventContainsSyntheticJobAndDatasetFacets() throws Exception {
     Snapshot snapshot =
         new StubSnapshot(42L, "replace", Map.of("total-records", "10", "total-file-size", "2048"));
     TableMetadata tableMetadata =
@@ -117,26 +62,64 @@ class IcebergOpenLineageMapperTest {
 
     var event =
         OBJECT_MAPPER.readTree(
-            IcebergOpenLineageMapper.toDatasetEventJson(
-                TEST_PRODUCER, TableIdentifier.of("db_sales", "daily_orders"), tableMetadata));
+            IcebergOpenLineageMapper.toTableRunEventJson(
+                TEST_PRODUCER,
+                "catalog1",
+                "POLARIS",
+                PolarisEventType.AFTER_CREATE_TABLE,
+                "req-42",
+                Instant.parse("2026-01-01T00:00:00Z"),
+                TableIdentifier.of("db_sales", "daily_orders"),
+                tableMetadata));
 
-    assertThat(event.at("/dataset/namespace").asText()).isEqualTo("db_sales");
-    assertThat(event.at("/dataset/name").asText()).isEqualTo("daily_orders");
-    assertThat(event.at("/dataset/facets/schema/fields")).hasSize(2);
-    assertThat(event.at("/dataset/facets/schema/fields/0/name").asText()).isEqualTo("id");
-    assertThat(event.at("/dataset/facets/schema/fields/0/type").asText()).isEqualTo("int");
-    assertThat(event.at("/dataset/facets/schema/fields/0/description").asText())
+    assertThat(event.path("eventType").asText()).isEqualTo("COMPLETE");
+    assertThat(event.at("/job/namespace").asText()).isEqualTo("polaris.POLARIS.catalog1");
+    assertThat(event.at("/job/name").asText()).isEqualTo("after_create_table:db_sales.daily_orders");
+    assertThat(event.at("/run/facets/processing_engine/name").asText()).isEqualTo("polaris");
+    assertThat(event.at("/outputs/0/namespace").asText()).isEqualTo("db_sales");
+    assertThat(event.at("/outputs/0/name").asText()).isEqualTo("daily_orders");
+    assertThat(event.at("/outputs/0/facets/schema/fields")).hasSize(2);
+    assertThat(event.at("/outputs/0/facets/schema/fields/0/name").asText()).isEqualTo("id");
+    assertThat(event.at("/outputs/0/facets/schema/fields/0/type").asText()).isEqualTo("int");
+    assertThat(event.at("/outputs/0/facets/schema/fields/0/description").asText())
         .isEqualTo("primary key");
-    // First snapshot → lifecycleStateChange=CREATE
-    assertThat(event.at("/dataset/facets/lifecycleStateChange/lifecycleStateChange").asText())
+    assertThat(event.at("/outputs/0/facets/lifecycleStateChange/lifecycleStateChange").asText())
         .isEqualTo("CREATE");
-    assertThat(event.at("/dataset/facets/version/datasetVersion").asText()).isEqualTo("42");
-    // SDK embeds _producer in every facet
-    assertThat(event.at("/dataset/facets/schema/_producer").asText())
+    assertThat(event.at("/outputs/0/facets/version/datasetVersion").asText()).isEqualTo("42");
+    assertThat(event.at("/outputs/0/facets/schema/_producer").asText())
         .isEqualTo(TEST_PRODUCER.toString());
-    // eventTime and eventType must be present at the event envelope level
-    assertThat(event.path("eventTime").isMissingNode()).isFalse();
-    assertThat(event.path("eventType").asText()).isEqualTo("DATASET");
+  }
+
+  @Test
+  void updateRunEventIncludesInputAndOutputDatasets() throws Exception {
+    TableMetadata tableMetadata =
+        TableMetadata.buildFromEmpty()
+            .assignUUID("test-uuid")
+            .setLocation("file:///tmp/warehouse/db/table")
+            .addSchema(
+                new Schema(List.of(Types.NestedField.required(1, "id", Types.IntegerType.get()))))
+            .addPartitionSpec(PartitionSpec.unpartitioned())
+            .addSortOrder(SortOrder.unsorted())
+            .build();
+
+    var event =
+        OBJECT_MAPPER.readTree(
+            IcebergOpenLineageMapper.toTableRunEventJson(
+                TEST_PRODUCER,
+                "catalog1",
+                "POLARIS",
+                PolarisEventType.AFTER_UPDATE_TABLE,
+                "req-43",
+                Instant.parse("2026-01-01T00:00:00Z"),
+                TableIdentifier.of("db_sales", "daily_orders"),
+                tableMetadata));
+
+    assertThat(event.path("eventType").asText()).isEqualTo("COMPLETE");
+    assertThat(event.at("/inputs/0/namespace").asText()).isEqualTo("db_sales");
+    assertThat(event.at("/inputs/0/name").asText()).isEqualTo("daily_orders");
+    assertThat(event.at("/outputs/0/namespace").asText()).isEqualTo("db_sales");
+    assertThat(event.at("/outputs/0/name").asText()).isEqualTo("daily_orders");
+    assertThat(event.at("/outputs/0/facets/lifecycleStateChange").isMissingNode()).isTrue();
   }
 
   @Test
@@ -153,28 +136,41 @@ class IcebergOpenLineageMapperTest {
 
     var event =
         OBJECT_MAPPER.readTree(
-            IcebergOpenLineageMapper.toDatasetEventJson(
-                TEST_PRODUCER, TableIdentifier.of("db_sales", "daily_orders"), tableMetadata));
+            IcebergOpenLineageMapper.toTableRunEventJson(
+                TEST_PRODUCER,
+                "catalog1",
+                "POLARIS",
+                PolarisEventType.AFTER_CREATE_TABLE,
+                "req-44",
+                Instant.parse("2026-01-01T00:00:00Z"),
+                TableIdentifier.of("db_sales", "daily_orders"),
+                tableMetadata));
 
-    assertThat(event.at("/dataset/facets/schema/fields")).hasSize(1);
-    assertThat(event.at("/dataset/facets/lifecycleStateChange").isMissingNode()).isTrue();
-    assertThat(event.at("/dataset/facets/version").isMissingNode()).isTrue();
+    assertThat(event.at("/outputs/0/facets/schema/fields")).hasSize(1);
+    assertThat(event.at("/outputs/0/facets/lifecycleStateChange").isMissingNode()).isTrue();
+    assertThat(event.at("/outputs/0/facets/version").isMissingNode()).isTrue();
   }
 
   @Test
-  void dropDatasetJsonContainsDropLifecycleState() throws Exception {
+  void dropRunJsonContainsDropLifecycleState() throws Exception {
     var event =
         OBJECT_MAPPER.readTree(
-            IcebergOpenLineageMapper.toDropDatasetEventJson(
-                TEST_PRODUCER, TableIdentifier.of("db_sales", "daily_orders")));
+            IcebergOpenLineageMapper.toDropRunEventJson(
+                TEST_PRODUCER,
+                "catalog1",
+                "POLARIS",
+                "req-45",
+                Instant.parse("2026-01-01T00:00:00Z"),
+                TableIdentifier.of("db_sales", "daily_orders")));
 
-    assertThat(event.at("/dataset/namespace").asText()).isEqualTo("db_sales");
-    assertThat(event.at("/dataset/name").asText()).isEqualTo("daily_orders");
-    assertThat(event.path("eventType").asText()).isEqualTo("DATASET");
-    assertThat(event.at("/dataset/facets/lifecycleStateChange/lifecycleStateChange").asText())
+    assertThat(event.path("eventType").asText()).isEqualTo("COMPLETE");
+    assertThat(event.at("/job/namespace").asText()).isEqualTo("polaris.POLARIS.catalog1");
+    assertThat(event.at("/job/name").asText()).isEqualTo("after_drop_table:db_sales.daily_orders");
+    assertThat(event.at("/inputs/0/namespace").asText()).isEqualTo("db_sales");
+    assertThat(event.at("/inputs/0/name").asText()).isEqualTo("daily_orders");
+    assertThat(event.at("/inputs/0/facets/lifecycleStateChange/lifecycleStateChange").asText())
         .isEqualTo("DROP");
-    assertThat(event.at("/dataset/facets/schema").isMissingNode()).isTrue();
-    assertThat(event.at("/dataset/facets/version").isMissingNode()).isTrue();
+    assertThat(event.at("/outputs")).hasSize(0);
   }
 
   private record StubSnapshot(long snapshotId, String operation, Map<String, String> summary)

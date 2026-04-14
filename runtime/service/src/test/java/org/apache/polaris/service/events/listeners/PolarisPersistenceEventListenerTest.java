@@ -78,14 +78,16 @@ class PolarisPersistenceEventListenerTest {
     var openLineage =
         OBJECT_MAPPER.readTree(
             listener.persistedEvent.getAdditionalPropertiesAsMap().get("openlineage"));
-    assertThat(openLineage.at("/dataset/namespace").asText()).isEqualTo("db_sales");
-    assertThat(openLineage.at("/dataset/name").asText()).isEqualTo("daily_orders");
-    assertThat(openLineage.at("/dataset/facets/schema/fields/0/name").asText()).isEqualTo("id");
-    assertThat(openLineage.at("/dataset/facets/schema/fields/0/type").asText()).isEqualTo("int");
-    assertThat(openLineage.at("/dataset/facets/schema/fields/0/description").asText())
+    assertThat(openLineage.path("eventType").asText()).isEqualTo("COMPLETE");
+    assertThat(openLineage.at("/inputs/0/namespace").asText()).isEqualTo("db_sales");
+    assertThat(openLineage.at("/outputs/0/namespace").asText()).isEqualTo("db_sales");
+    assertThat(openLineage.at("/outputs/0/name").asText()).isEqualTo("daily_orders");
+    assertThat(openLineage.at("/outputs/0/facets/schema/fields/0/name").asText()).isEqualTo("id");
+    assertThat(openLineage.at("/outputs/0/facets/schema/fields/0/type").asText()).isEqualTo("int");
+    assertThat(openLineage.at("/outputs/0/facets/schema/fields/0/description").asText())
         .isEqualTo("primary key");
-    assertThat(openLineage.at("/dataset/facets/version").isMissingNode()).isTrue();
-    assertThat(openLineage.at("/dataset/facets/lifecycleStateChange").isMissingNode()).isTrue();
+    assertThat(openLineage.at("/outputs/0/facets/version").isMissingNode()).isTrue();
+    assertThat(openLineage.at("/outputs/0/facets/lifecycleStateChange").isMissingNode()).isTrue();
   }
 
   @Test
@@ -137,12 +139,14 @@ class PolarisPersistenceEventListenerTest {
     var openLineage =
         OBJECT_MAPPER.readTree(
             listener.persistedEvent.getAdditionalPropertiesAsMap().get("openlineage"));
-    assertThat(openLineage.at("/dataset/namespace").asText()).isEqualTo("db_sales");
-    assertThat(openLineage.at("/dataset/name").asText()).isEqualTo("new_table");
-    assertThat(openLineage.at("/dataset/facets/schema/fields/0/name").asText()).isEqualTo("id");
+    assertThat(openLineage.path("eventType").asText()).isEqualTo("COMPLETE");
+    assertThat(openLineage.at("/job/namespace").asText()).isEqualTo("polaris.test-realm.test-catalog");
+    assertThat(openLineage.at("/outputs/0/namespace").asText()).isEqualTo("db_sales");
+    assertThat(openLineage.at("/outputs/0/name").asText()).isEqualTo("new_table");
+    assertThat(openLineage.at("/outputs/0/facets/schema/fields/0/name").asText()).isEqualTo("id");
     // No snapshot yet on a freshly created table
-    assertThat(openLineage.at("/dataset/facets/version").isMissingNode()).isTrue();
-    assertThat(openLineage.at("/dataset/facets/lifecycleStateChange").isMissingNode()).isTrue();
+    assertThat(openLineage.at("/outputs/0/facets/version").isMissingNode()).isTrue();
+    assertThat(openLineage.at("/outputs/0/facets/lifecycleStateChange").isMissingNode()).isTrue();
   }
 
   // ---------- AFTER_DROP_TABLE ----------
@@ -171,11 +175,12 @@ class PolarisPersistenceEventListenerTest {
     var openLineage =
         OBJECT_MAPPER.readTree(
             listener.persistedEvent.getAdditionalPropertiesAsMap().get("openlineage"));
-    assertThat(openLineage.at("/dataset/namespace").asText()).isEqualTo("db_sales");
-    assertThat(openLineage.at("/dataset/name").asText()).isEqualTo("daily_orders");
-    assertThat(openLineage.at("/dataset/facets/lifecycleStateChange/lifecycleStateChange").asText())
+    assertThat(openLineage.path("eventType").asText()).isEqualTo("COMPLETE");
+    assertThat(openLineage.at("/inputs/0/namespace").asText()).isEqualTo("db_sales");
+    assertThat(openLineage.at("/inputs/0/name").asText()).isEqualTo("daily_orders");
+    assertThat(openLineage.at("/inputs/0/facets/lifecycleStateChange/lifecycleStateChange").asText())
         .isEqualTo("DROP");
-    assertThat(openLineage.at("/dataset/facets/schema").isMissingNode()).isTrue();
+    assertThat(openLineage.at("/inputs/0/facets/schema").isMissingNode()).isTrue();
   }
 
   @Test
