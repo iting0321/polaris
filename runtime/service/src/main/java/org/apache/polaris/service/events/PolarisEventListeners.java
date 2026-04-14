@@ -34,20 +34,26 @@ import jakarta.inject.Inject;
 import java.util.HashSet;
 import java.util.Set;
 import org.apache.polaris.service.events.listeners.PolarisEventListener;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @ApplicationScoped
 public class PolarisEventListeners {
+  private static final Logger LOGGER = LoggerFactory.getLogger(PolarisEventListeners.class);
+
   @Inject EventBus eventBus;
   @Inject @Any Instance<PolarisEventListener> eventListeners;
   @Inject PolarisEventListenerConfiguration configuration;
 
   public void onStartup(@Observes StartupEvent event) {
     Set<String> listenerTypeSet = configuration.types().orElseGet(HashSet::new);
+    LOGGER.info("Configuring Polaris event listeners: {}", listenerTypeSet);
     for (String enabledEventListener : listenerTypeSet) {
       PolarisEventListener listener =
           eventListeners.select(Identifier.Literal.of(enabledEventListener)).get();
       Handler<Message<PolarisEvent>> handler = e -> listener.onEvent(e.body());
       eventBus.localConsumer(POLARIS_EVENT_CHANNEL, handler);
+      LOGGER.info("Registered Polaris event listener '{}'", enabledEventListener);
     }
   }
 }

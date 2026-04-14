@@ -98,26 +98,24 @@ abstract class LicenseNoticeMerge @Inject constructor(objectFactory: ObjectFacto
                   "* Invalid line after license block header for '$header', expected an empty line"
                 )
               }
-              val dependencies = mutableListOf<String>()
-              val suffix = StringBuilder()
               while (iter.hasNext()) {
-                val ln = iter.next().trim()
-                if (ln.startsWith(LicenseFileValidation.LICENSE_MENTION_PREFIX)) {
-                  dependencies.add(ln)
-                } else {
-                  suffix.append(ln).append("\n")
-                  while (iter.hasNext()) {
-                    suffix.append(iter.next().trim()).append("\n")
+                val next = iter.next()
+                if (!next.isBlank()) {
+                  val remaining = buildList {
+                    add(next)
+                    while (iter.hasNext()) {
+                      add(iter.next())
+                    }
                   }
-                  break
+                  return@map parseLicenseBlock(header, remaining)
                 }
               }
-              LicenseBlock(header, dependencies, suffix.toString().trim())
+              LicenseBlock(header, emptyList(), "")
             }
         }
         .groupingBy { it.header }
         .reduce { key, accumulator, element ->
-          if (accumulator.suffix != element.suffix) {
+          if (normalizeSuffix(accumulator.suffix) != normalizeSuffix(element.suffix)) {
             errors.add(
               "* License information for '$key' differs across the imported LICENSE files:\n${accumulator.suffix}\n${element.suffix}\n"
             )
@@ -125,7 +123,7 @@ abstract class LicenseNoticeMerge @Inject constructor(objectFactory: ObjectFacto
           LicenseBlock(
             key,
             accumulator.dependencies.plus(element.dependencies).sorted().distinct(),
-            accumulator.suffix,
+            normalizeSuffix(accumulator.suffix),
           )
         }
         .values
@@ -135,6 +133,28 @@ abstract class LicenseNoticeMerge @Inject constructor(objectFactory: ObjectFacto
 
     return blocks
   }
+
+  private fun parseLicenseBlock(header: String, lines: List<String>): LicenseBlock {
+    val dependencies = mutableListOf<String>()
+    val suffix = StringBuilder()
+    val iter = lines.iterator()
+    while (iter.hasNext()) {
+      val ln = iter.next().trim()
+      if (ln.startsWith(LicenseFileValidation.LICENSE_MENTION_PREFIX)) {
+        dependencies.add(ln)
+      } else {
+        suffix.append(ln).append("\n")
+        while (iter.hasNext()) {
+          suffix.append(iter.next().trim()).append("\n")
+        }
+        break
+      }
+    }
+    return LicenseBlock(header, dependencies, normalizeSuffix(suffix.toString()))
+  }
+
+  private fun normalizeSuffix(value: String): String =
+    value.lines().dropWhile { it.isBlank() }.dropLastWhile { it.isBlank() }.joinToString("\n")
 
   private fun readNoticeFiles(): Collection<String> =
     sourceLicenseNotice

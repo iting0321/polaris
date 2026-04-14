@@ -47,17 +47,28 @@ public class HttpOpenLineageEventListener extends PolarisPersistenceEventListene
     this.httpClient =
         HttpClient.newBuilder().connectTimeout(configuration.connectTimeout()).build();
     this.marquezUri = URI.create(configuration.endpoint());
+    LOGGER.info("HttpOpenLineageEventListener initialized with endpoint '{}'", marquezUri);
   }
 
   @Override
   protected void processEvent(String realmId, PolarisEvent event) {
     Map<String, String> properties = event.getAdditionalPropertiesAsMap();
     if (properties == null) {
+      LOGGER.warn(
+          "Skipping OpenLineage emission for event '{}' on '{}' in realm '{}' because event properties are missing",
+          event.getEventType(),
+          event.getResourceIdentifier(),
+          realmId);
       return;
     }
 
     String openLineageJson = properties.get("openlineage");
     if (openLineageJson == null || openLineageJson.isBlank()) {
+      LOGGER.warn(
+          "Skipping OpenLineage emission for event '{}' on '{}' in realm '{}' because the 'openlineage' payload is missing",
+          event.getEventType(),
+          event.getResourceIdentifier(),
+          realmId);
       return;
     }
 
@@ -70,23 +81,36 @@ public class HttpOpenLineageEventListener extends PolarisPersistenceEventListene
             .build();
 
     httpClient
-        .sendAsync(request, HttpResponse.BodyHandlers.discarding())
+        .sendAsync(request, HttpResponse.BodyHandlers.ofString())
         .thenAccept(
             response -> {
-              if (response.statusCode() == 201) {
-                LOGGER.debug(
-                    "Successfully sent OpenLineage event to Marquez for realm '{}'", realmId);
+              if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                LOGGER.info(
+                    "Sent OpenLineage event '{}' for '{}' in realm '{}' to '{}' with status {}",
+                    event.getEventType(),
+                    event.getResourceIdentifier(),
+                    realmId,
+                    marquezUri,
+                    response.statusCode());
               } else {
                 LOGGER.warn(
-                    "Marquez returned unexpected status {} for realm '{}'",
+                    "Marquez returned status {} for event '{}' on '{}' in realm '{}': {}",
                     response.statusCode(),
-                    realmId);
+                    event.getEventType(),
+                    event.getResourceIdentifier(),
+                    realmId,
+                    response.body());
               }
             })
         .exceptionally(
             throwable -> {
               LOGGER.error(
-                  "Failed to send OpenLineage event to Marquez for realm '{}'", realmId, throwable);
+                  "Failed to send OpenLineage event '{}' for '{}' in realm '{}' to '{}'",
+                  event.getEventType(),
+                  event.getResourceIdentifier(),
+                  realmId,
+                  marquezUri,
+                  throwable);
               return null;
             });
   }
