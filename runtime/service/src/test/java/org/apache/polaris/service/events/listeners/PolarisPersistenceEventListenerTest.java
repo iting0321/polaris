@@ -24,12 +24,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
 import java.util.Map;
+import org.apache.iceberg.DataFile;
+import org.apache.iceberg.ManifestFile;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
+import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.SortOrder;
 import org.apache.iceberg.TableMetadata;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.TableIdentifier;
+import org.apache.iceberg.io.FileIO;
 import org.apache.iceberg.rest.responses.LoadTableResponse;
 import org.apache.iceberg.types.Types;
 import org.apache.polaris.service.events.EventAttributeMap;
@@ -37,6 +41,7 @@ import org.apache.polaris.service.events.EventAttributes;
 import org.apache.polaris.service.events.ImmutablePolarisEventMetadata;
 import org.apache.polaris.service.events.PolarisEvent;
 import org.apache.polaris.service.events.PolarisEventType;
+import org.apache.polaris.service.events.openlineage.OpenLineageInputTracker;
 import org.junit.jupiter.api.Test;
 
 class PolarisPersistenceEventListenerTest {
@@ -149,6 +154,51 @@ class PolarisPersistenceEventListenerTest {
     assertThat(openLineage.at("/outputs/0/facets/lifecycleStateChange").isMissingNode()).isTrue();
   }
 
+  @Test
+  void afterCreateTableIncludesTrackedInputDatasetsForCtas() throws Exception {
+    CaptureListener listener = new CaptureListener();
+    listener.openLineageInputTracker = new OpenLineageInputTracker();
+
+    TableMetadata sourceTableMetadata =
+        buildTableMetadataWithSnapshot("source-uuid", "file:///tmp/warehouse/db_src/source");
+    listener.onEvent(
+        new PolarisEvent(
+            PolarisEventType.AFTER_LOAD_TABLE,
+            ImmutablePolarisEventMetadata.builder().realmId("test-realm").build(),
+            new EventAttributeMap()
+                .put(EventAttributes.CATALOG_NAME, "test-catalog")
+                .put(EventAttributes.NAMESPACE, Namespace.of("db_src"))
+                .put(EventAttributes.TABLE_NAME, "source")
+                .put(
+                    EventAttributes.LOAD_TABLE_RESPONSE,
+                    LoadTableResponse.builder().withTableMetadata(sourceTableMetadata).build())));
+
+    TableMetadata targetTableMetadata =
+        buildTableMetadataWithSnapshot("target-uuid", "file:///tmp/warehouse/db_out/target");
+    listener.onEvent(
+        new PolarisEvent(
+            PolarisEventType.AFTER_CREATE_TABLE,
+            ImmutablePolarisEventMetadata.builder()
+                .realmId("test-realm")
+                .requestId("req-456")
+                .build(),
+            new EventAttributeMap()
+                .put(EventAttributes.CATALOG_NAME, "test-catalog")
+                .put(EventAttributes.NAMESPACE, Namespace.of("db_out"))
+                .put(EventAttributes.TABLE_NAME, "target")
+                .put(
+                    EventAttributes.LOAD_TABLE_RESPONSE,
+                    LoadTableResponse.builder().withTableMetadata(targetTableMetadata).build())));
+
+    var openLineage =
+        OBJECT_MAPPER.readTree(
+            listener.persistedEvent.getAdditionalPropertiesAsMap().get("openlineage"));
+    assertThat(openLineage.at("/inputs/0/namespace").asText()).isEqualTo("db_src");
+    assertThat(openLineage.at("/inputs/0/name").asText()).isEqualTo("source");
+    assertThat(openLineage.at("/outputs/0/namespace").asText()).isEqualTo("db_out");
+    assertThat(openLineage.at("/outputs/0/name").asText()).isEqualTo("target");
+  }
+
   // ---------- AFTER_DROP_TABLE ----------
 
   @Test
@@ -215,6 +265,21 @@ class PolarisPersistenceEventListenerTest {
         .build();
   }
 
+  private static TableMetadata buildTableMetadataWithSnapshot(String uuid, String location) {
+    return TableMetadata.buildFromEmpty()
+        .assignUUID(uuid)
+        .setLocation(location)
+        .addSchema(
+            new Schema(
+                List.of(
+                    Types.NestedField.required(1, "id", Types.IntegerType.get(), "primary key"),
+                    Types.NestedField.optional(2, "payload", Types.StringType.get()))))
+        .addPartitionSpec(PartitionSpec.unpartitioned())
+        .addSortOrder(SortOrder.unsorted())
+        .setBranchSnapshot(new StubSnapshot(42L, "append", Map.of("spark.app.id", "app-1")), "main")
+        .build();
+  }
+
   // ---------- test listeners ----------
 
   /** Captures the processed event; OpenLineage enabled (default null-config behaviour). */
@@ -241,6 +306,54 @@ class PolarisPersistenceEventListenerTest {
     @Override
     protected void processEvent(String realmId, org.apache.polaris.core.entity.PolarisEvent event) {
       this.persistedEvent = event;
+    }
+  }
+
+  private record StubSnapshot(long snapshotId, String operation, Map<String, String> summary)
+      implements Snapshot {
+    @Override
+    public long sequenceNumber() {
+      return 1L;
+    }
+
+    @Override
+    public Long parentId() {
+      return null;
+    }
+
+    @Override
+    public long timestampMillis() {
+      return 1L;
+    }
+
+    @Override
+    public List<ManifestFile> allManifests(FileIO io) {
+      return List.of();
+    }
+
+    @Override
+    public List<ManifestFile> dataManifests(FileIO io) {
+      return List.of();
+    }
+
+    @Override
+    public List<ManifestFile> deleteManifests(FileIO io) {
+      return List.of();
+    }
+
+    @Override
+    public Iterable<DataFile> addedDataFiles(FileIO io) {
+      return List.of();
+    }
+
+    @Override
+    public Iterable<DataFile> removedDataFiles(FileIO io) {
+      return List.of();
+    }
+
+    @Override
+    public String manifestListLocation() {
+      return "file:///tmp/manifest-list.avro";
     }
   }
 }

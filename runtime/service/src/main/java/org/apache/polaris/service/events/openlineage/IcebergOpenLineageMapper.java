@@ -43,10 +43,11 @@ import org.apache.polaris.service.events.PolarisEventType;
  * Maps Iceberg table mutations to OpenLineage run events.
  *
  * <p>Marquez's UI is job-centric. Emitting synthetic Polaris jobs with dataset inputs/outputs makes
- * table create/update/drop activity visible in the graph, while preserving the useful dataset
- * facets such as schema, datasource, lifecycle state, and version.
+ * table create/update/drop activity visible in the graph, while preserving dataset facets such as
+ * schema, datasource, lifecycle state, and version.
  */
 public final class IcebergOpenLineageMapper {
+  public record LineageDataset(TableIdentifier tableIdentifier, TableMetadata tableMetadata) {}
 
   private static final ObjectMapper MAPPER = OpenLineageClientUtils.newObjectMapper();
 
@@ -59,19 +60,18 @@ public final class IcebergOpenLineageMapper {
       PolarisEventType eventType,
       String requestId,
       Instant eventTime,
+      List<LineageDataset> inputDatasets,
       TableIdentifier tableIdentifier,
       TableMetadata tableMetadata) {
     OpenLineage ol = new OpenLineage(producerUri);
-    OpenLineage.DatasetFacets datasetFacets = buildDatasetFacets(ol, tableIdentifier, tableMetadata);
+    OpenLineage.DatasetFacets datasetFacets =
+        buildDatasetFacets(ol, eventType, tableIdentifier, tableMetadata);
     Snapshot snapshot = tableMetadata.currentSnapshot();
 
     List<OpenLineage.InputDataset> inputs =
         eventType == PolarisEventType.AFTER_UPDATE_TABLE
             ? List.of(buildInputDataset(ol, tableIdentifier, datasetFacets))
-            : List.of();
-
-    List<OpenLineage.OutputDataset> outputs =
-        List.of(buildOutputDataset(ol, tableIdentifier, datasetFacets, snapshot));
+            : buildInputDatasets(ol, inputDatasets);
 
     OpenLineage.RunEvent event =
         ol.newRunEventBuilder()
@@ -80,7 +80,7 @@ public final class IcebergOpenLineageMapper {
             .run(buildRun(ol, requestId, eventTime))
             .job(buildJob(ol, catalogName, realmId, eventType, tableIdentifier))
             .inputs(inputs)
-            .outputs(outputs)
+            .outputs(List.of(buildOutputDataset(ol, tableIdentifier, datasetFacets, snapshot)))
             .build();
 
     return serialize(event);
@@ -167,8 +167,30 @@ public final class IcebergOpenLineageMapper {
         .build();
   }
 
+  private static List<OpenLineage.InputDataset> buildInputDatasets(
+      OpenLineage ol, List<LineageDataset> inputDatasets) {
+    if (inputDatasets == null || inputDatasets.isEmpty()) {
+      return List.of();
+    }
+    return inputDatasets.stream()
+        .map(
+            dataset ->
+                buildInputDataset(
+                    ol,
+                    dataset.tableIdentifier(),
+                    buildDatasetFacets(
+                        ol,
+                        PolarisEventType.AFTER_LOAD_TABLE,
+                        dataset.tableIdentifier(),
+                        dataset.tableMetadata())))
+        .collect(Collectors.toList());
+  }
+
   private static OpenLineage.DatasetFacets buildDatasetFacets(
-      OpenLineage ol, TableIdentifier tableIdentifier, TableMetadata tableMetadata) {
+      OpenLineage ol,
+      PolarisEventType eventType,
+      TableIdentifier tableIdentifier,
+      TableMetadata tableMetadata) {
     OpenLineage.DatasetFacetsBuilder facetsBuilder =
         ol.newDatasetFacetsBuilder()
             .schema(buildSchemaFacet(ol, tableMetadata.schema()))
@@ -176,7 +198,7 @@ public final class IcebergOpenLineageMapper {
 
     Snapshot snapshot = tableMetadata.currentSnapshot();
     if (snapshot != null) {
-      addSnapshotFacets(ol, facetsBuilder, tableMetadata, snapshot);
+      addSnapshotFacets(ol, facetsBuilder, eventType, tableMetadata, snapshot);
     }
     return facetsBuilder.build();
   }
@@ -208,6 +230,7 @@ public final class IcebergOpenLineageMapper {
                   ol.newOutputStatisticsOutputDatasetFacetBuilder()
                       .rowCount(summaryLong(snapshot, "total-records"))
                       .size(summaryLong(snapshot, "total-file-size"))
+                      .fileCount(summaryLong(snapshot, "added-data-files"))
                       .build())
               .build());
     }
@@ -251,6 +274,7 @@ public final class IcebergOpenLineageMapper {
   private static void addSnapshotFacets(
       OpenLineage ol,
       OpenLineage.DatasetFacetsBuilder facetsBuilder,
+      PolarisEventType eventType,
       TableMetadata metadata,
       Snapshot snapshot) {
     facetsBuilder
@@ -260,13 +284,18 @@ public final class IcebergOpenLineageMapper {
                 .build())
         .lifecycleStateChange(
             ol.newLifecycleStateChangeDatasetFacetBuilder()
-                .lifecycleStateChange(mapLifecycleState(metadata, snapshot))
+                .lifecycleStateChange(mapLifecycleState(eventType, metadata, snapshot))
                 .build());
   }
 
   private static OpenLineage.LifecycleStateChangeDatasetFacet.LifecycleStateChange
-      mapLifecycleState(TableMetadata metadata, Snapshot snapshot) {
-    if (metadata.snapshots().size() == 1) {
+      mapLifecycleState(PolarisEventType eventType, TableMetadata metadata, Snapshot snapshot) {
+    // Lifecycle mapping intentionally follows user-visible table semantics:
+    // - create -> CREATE
+    // - append/schema evolution -> ALTER
+    // - overwrite/replace -> OVERWRITE
+    // - drop is handled by toDropRunEventJson() as DROP
+    if (eventType == PolarisEventType.AFTER_CREATE_TABLE && metadata.snapshots().size() == 1) {
       return OpenLineage.LifecycleStateChangeDatasetFacet.LifecycleStateChange.CREATE;
     }
 

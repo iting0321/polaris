@@ -69,6 +69,7 @@ class IcebergOpenLineageMapperTest {
                 PolarisEventType.AFTER_CREATE_TABLE,
                 "req-42",
                 Instant.parse("2026-01-01T00:00:00Z"),
+                List.of(),
                 TableIdentifier.of("db_sales", "daily_orders"),
                 tableMetadata));
 
@@ -111,6 +112,7 @@ class IcebergOpenLineageMapperTest {
                 PolarisEventType.AFTER_UPDATE_TABLE,
                 "req-43",
                 Instant.parse("2026-01-01T00:00:00Z"),
+                List.of(),
                 TableIdentifier.of("db_sales", "daily_orders"),
                 tableMetadata));
 
@@ -120,6 +122,71 @@ class IcebergOpenLineageMapperTest {
     assertThat(event.at("/outputs/0/namespace").asText()).isEqualTo("db_sales");
     assertThat(event.at("/outputs/0/name").asText()).isEqualTo("daily_orders");
     assertThat(event.at("/outputs/0/facets/lifecycleStateChange").isMissingNode()).isTrue();
+  }
+
+  @Test
+  void updateRunEventUsesAlterLifecycleEvenWhenOnlyFirstSnapshotExists() throws Exception {
+    Snapshot snapshot =
+        new StubSnapshot(42L, "append", Map.of("total-records", "10", "total-file-size", "2048"));
+    TableMetadata tableMetadata =
+        TableMetadata.buildFromEmpty()
+            .assignUUID("test-uuid")
+            .setLocation("file:///tmp/warehouse/db/table")
+            .addSchema(
+                new Schema(List.of(Types.NestedField.required(1, "id", Types.IntegerType.get()))))
+            .addPartitionSpec(PartitionSpec.unpartitioned())
+            .addSortOrder(SortOrder.unsorted())
+            .setBranchSnapshot(snapshot, "main")
+            .build();
+
+    var event =
+        OBJECT_MAPPER.readTree(
+            IcebergOpenLineageMapper.toTableRunEventJson(
+                TEST_PRODUCER,
+                "catalog1",
+                "POLARIS",
+                PolarisEventType.AFTER_UPDATE_TABLE,
+                "req-43b",
+                Instant.parse("2026-01-01T00:00:00Z"),
+                List.of(),
+                TableIdentifier.of("db_sales", "daily_orders"),
+                tableMetadata));
+
+    assertThat(event.at("/outputs/0/facets/lifecycleStateChange/lifecycleStateChange").asText())
+        .isEqualTo("ALTER");
+  }
+
+  @Test
+  void updateRunEventUsesOverwriteLifecycleForOverwriteSnapshots() throws Exception {
+    Snapshot snapshot =
+        new StubSnapshot(
+            43L, "overwrite", Map.of("total-records", "10", "total-file-size", "2048"));
+    TableMetadata tableMetadata =
+        TableMetadata.buildFromEmpty()
+            .assignUUID("test-uuid")
+            .setLocation("file:///tmp/warehouse/db/table")
+            .addSchema(
+                new Schema(List.of(Types.NestedField.required(1, "id", Types.IntegerType.get()))))
+            .addPartitionSpec(PartitionSpec.unpartitioned())
+            .addSortOrder(SortOrder.unsorted())
+            .setBranchSnapshot(snapshot, "main")
+            .build();
+
+    var event =
+        OBJECT_MAPPER.readTree(
+            IcebergOpenLineageMapper.toTableRunEventJson(
+                TEST_PRODUCER,
+                "catalog1",
+                "POLARIS",
+                PolarisEventType.AFTER_UPDATE_TABLE,
+                "req-43c",
+                Instant.parse("2026-01-01T00:00:00Z"),
+                List.of(),
+                TableIdentifier.of("db_sales", "daily_orders"),
+                tableMetadata));
+
+    assertThat(event.at("/outputs/0/facets/lifecycleStateChange/lifecycleStateChange").asText())
+        .isEqualTo("OVERWRITE");
   }
 
   @Test
@@ -143,6 +210,7 @@ class IcebergOpenLineageMapperTest {
                 PolarisEventType.AFTER_CREATE_TABLE,
                 "req-44",
                 Instant.parse("2026-01-01T00:00:00Z"),
+                List.of(),
                 TableIdentifier.of("db_sales", "daily_orders"),
                 tableMetadata));
 

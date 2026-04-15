@@ -22,6 +22,7 @@ package org.apache.polaris.service.events.listeners;
 import com.google.common.collect.ImmutableMap;
 import jakarta.inject.Inject;
 import java.net.URI;
+import java.util.List;
 import java.util.Map;
 import org.apache.iceberg.TableMetadata;
 import org.apache.iceberg.TableMetadataParser;
@@ -35,6 +36,7 @@ import org.apache.polaris.service.events.PolarisEvent;
 import org.apache.polaris.service.events.PolarisEventType;
 import org.apache.polaris.service.events.openlineage.IcebergOpenLineageMapper;
 import org.apache.polaris.service.events.openlineage.OpenLineageConfiguration;
+import org.apache.polaris.service.events.openlineage.OpenLineageInputTracker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -48,6 +50,7 @@ public abstract class PolarisPersistenceEventListener implements PolarisEventLis
    * {@code true} and the producer URI falls back to a default value.
    */
   @Inject OpenLineageConfiguration openLineageConfig;
+  @Inject OpenLineageInputTracker openLineageInputTracker;
 
   // ---------- PolarisEventListener ----------
 
@@ -57,6 +60,7 @@ public abstract class PolarisPersistenceEventListener implements PolarisEventLis
       case AFTER_CREATE_TABLE -> handleAfterCreateTable(event);
       case AFTER_UPDATE_TABLE -> handleAfterUpdateTable(event);
       case AFTER_DROP_TABLE -> handleAfterDropTable(event);
+      case AFTER_LOAD_TABLE -> trackLoadedTable(event);
       case AFTER_CREATE_CATALOG -> handleAfterCreateCatalog(event);
       default -> {
         // Other events not handled by this listener
@@ -118,6 +122,7 @@ public abstract class PolarisPersistenceEventListener implements PolarisEventLis
                 PolarisEventType.AFTER_CREATE_TABLE,
                 event.metadata().requestId().orElse(null),
                 event.metadata().timestamp(),
+                resolveCreateInputs(tableIdentifier, tableMetadata),
                 tableIdentifier,
                 tableMetadata));
       } catch (RuntimeException e) {
@@ -162,6 +167,7 @@ public abstract class PolarisPersistenceEventListener implements PolarisEventLis
                   PolarisEventType.AFTER_UPDATE_TABLE,
                   event.metadata().requestId().orElse(null),
                   event.metadata().timestamp(),
+                  List.of(),
                   tableIdentifier,
                   tableMetadata));
         } catch (RuntimeException e) {
@@ -234,6 +240,29 @@ public abstract class PolarisPersistenceEventListener implements PolarisEventLis
   }
 
   // ---------- helpers ----------
+
+  private void trackLoadedTable(PolarisEvent event) {
+    if (openLineageInputTracker == null) {
+      return;
+    }
+    LoadTableResponse loadTableResponse =
+        event.attributes().get(EventAttributes.LOAD_TABLE_RESPONSE).orElse(null);
+    if (loadTableResponse == null || loadTableResponse.tableMetadata() == null) {
+      return;
+    }
+    Namespace namespace = event.attributes().getRequired(EventAttributes.NAMESPACE);
+    String tableName = event.attributes().getRequired(EventAttributes.TABLE_NAME);
+    openLineageInputTracker.record(
+        TableIdentifier.of(namespace, tableName), loadTableResponse.tableMetadata());
+  }
+
+  private List<IcebergOpenLineageMapper.LineageDataset> resolveCreateInputs(
+      TableIdentifier tableIdentifier, TableMetadata tableMetadata) {
+    if (openLineageInputTracker == null) {
+      return List.of();
+    }
+    return openLineageInputTracker.inputsFor(tableIdentifier, tableMetadata);
+  }
 
   private static TableIdentifier resolveTableIdentifier(PolarisEvent event) {
     return event
