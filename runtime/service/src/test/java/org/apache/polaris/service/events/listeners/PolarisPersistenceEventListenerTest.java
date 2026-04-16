@@ -146,7 +146,8 @@ class PolarisPersistenceEventListenerTest {
         OBJECT_MAPPER.readTree(
             listener.persistedEvent.getAdditionalPropertiesAsMap().get("openlineage"));
     assertThat(openLineage.path("eventType").asText()).isEqualTo("COMPLETE");
-    assertThat(openLineage.at("/job/namespace").asText()).isEqualTo("polaris.test-realm.test-catalog");
+    assertThat(openLineage.at("/job/namespace").asText())
+        .isEqualTo("polaris.test-realm.test-catalog");
     assertThat(openLineage.at("/outputs/0/namespace").asText()).isEqualTo("db_sales");
     assertThat(openLineage.at("/outputs/0/name").asText()).isEqualTo("new_table");
     assertThat(openLineage.at("/outputs/0/facets/schema/fields/0/name").asText()).isEqualTo("id");
@@ -259,7 +260,8 @@ class PolarisPersistenceEventListenerTest {
     assertThat(openLineage.at("/job/name").asText()).isEqualTo("after_create_table:db_out.target");
     assertThat(openLineage.at("/inputs/0/namespace").asText()).isEqualTo("db_src");
     assertThat(openLineage.at("/inputs/0/name").asText()).isEqualTo("source");
-    assertThat(openLineage.at("/outputs/0/facets/lifecycleStateChange/lifecycleStateChange").asText())
+    assertThat(
+            openLineage.at("/outputs/0/facets/lifecycleStateChange/lifecycleStateChange").asText())
         .isEqualTo("CREATE");
   }
 
@@ -292,7 +294,8 @@ class PolarisPersistenceEventListenerTest {
     assertThat(openLineage.path("eventType").asText()).isEqualTo("COMPLETE");
     assertThat(openLineage.at("/inputs/0/namespace").asText()).isEqualTo("db_sales");
     assertThat(openLineage.at("/inputs/0/name").asText()).isEqualTo("daily_orders");
-    assertThat(openLineage.at("/inputs/0/facets/lifecycleStateChange/lifecycleStateChange").asText())
+    assertThat(
+            openLineage.at("/inputs/0/facets/lifecycleStateChange/lifecycleStateChange").asText())
         .isEqualTo("DROP");
     assertThat(openLineage.at("/inputs/0/facets/schema").isMissingNode()).isTrue();
   }

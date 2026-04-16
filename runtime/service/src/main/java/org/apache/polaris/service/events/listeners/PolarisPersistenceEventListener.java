@@ -26,19 +26,19 @@ import java.util.List;
 import java.util.Map;
 import org.apache.iceberg.TableMetadata;
 import org.apache.iceberg.TableMetadataParser;
+import org.apache.iceberg.UpdateRequirement;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.rest.requests.UpdateTableRequest;
 import org.apache.iceberg.rest.responses.LoadTableResponse;
-import org.apache.iceberg.UpdateRequirement;
 import org.apache.polaris.core.admin.model.Catalog;
 import org.apache.polaris.core.auth.PolarisPrincipal;
 import org.apache.polaris.service.events.EventAttributes;
 import org.apache.polaris.service.events.PolarisEvent;
 import org.apache.polaris.service.events.PolarisEventType;
-import org.apache.polaris.service.events.openlineage.OpenLineageCreateTracker;
 import org.apache.polaris.service.events.openlineage.IcebergOpenLineageMapper;
 import org.apache.polaris.service.events.openlineage.OpenLineageConfiguration;
+import org.apache.polaris.service.events.openlineage.OpenLineageCreateTracker;
 import org.apache.polaris.service.events.openlineage.OpenLineageInputTracker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,6 +53,7 @@ public abstract class PolarisPersistenceEventListener implements PolarisEventLis
    * {@code true} and the producer URI falls back to a default value.
    */
   @Inject OpenLineageConfiguration openLineageConfig;
+
   @Inject OpenLineageInputTracker openLineageInputTracker;
   @Inject OpenLineageCreateTracker openLineageCreateTracker;
 
@@ -72,8 +73,6 @@ public abstract class PolarisPersistenceEventListener implements PolarisEventLis
     }
   }
 
-  // ---------- testability hooks ----------
-
   /** Returns {@code true} when OpenLineage facets should be generated and stored. */
   protected boolean isOpenLineageEnabled() {
     // null → CDI not active (plain unit test) → enable by default
@@ -87,8 +86,6 @@ public abstract class PolarisPersistenceEventListener implements PolarisEventLis
     }
     return URI.create(openLineageConfig.producer());
   }
-
-  // ---------- event handlers ----------
 
   private void handleAfterCreateTable(PolarisEvent event) {
     LoadTableResponse loadTableResponse =
@@ -253,8 +250,6 @@ public abstract class PolarisPersistenceEventListener implements PolarisEventLis
     processEvent(event.metadata().realmId(), polarisEvent);
   }
 
-  // ---------- helpers ----------
-
   private void trackLoadedTable(PolarisEvent event) {
     if (openLineageInputTracker == null) {
       return;
@@ -279,7 +274,10 @@ public abstract class PolarisPersistenceEventListener implements PolarisEventLis
   }
 
   private boolean shouldTreatUpdateAsCreate(
-      PolarisEvent event, TableIdentifier tableIdentifier, TableMetadata tableMetadata, String requestId) {
+      PolarisEvent event,
+      TableIdentifier tableIdentifier,
+      TableMetadata tableMetadata,
+      String requestId) {
     if (tableMetadata == null || tableMetadata.currentSnapshot() == null) {
       return false;
     }

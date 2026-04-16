@@ -51,6 +51,7 @@ public class HttpOpenLineageEventListener extends PolarisPersistenceEventListene
   }
 
   @Override
+  protected void processEvent(String realmId, PolarisEvent event) {
     Map<String, String> properties = event.getAdditionalPropertiesAsMap();
     if (properties == null) {
       LOGGER.warn(

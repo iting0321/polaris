@@ -45,7 +45,8 @@ public class OpenLineageInputTracker {
     trackedLoads.compute(
         sparkAppId,
         (key, existing) -> {
-          List<TrackedTableLoad> loads = existing == null ? new ArrayList<>() : new ArrayList<>(existing);
+          List<TrackedTableLoad> loads =
+              existing == null ? new ArrayList<>() : new ArrayList<>(existing);
           loads.removeIf(load -> load.recordedAt().plus(RETENTION).isBefore(now));
           loads.add(new TrackedTableLoad(tableIdentifier, tableMetadata, now));
           return loads;

@@ -244,10 +244,7 @@ public final class IcebergOpenLineageMapper {
         tableMetadata != null && tableMetadata.location() != null
             ? URI.create(tableMetadata.location())
             : URI.create(
-                "urn:polaris:"
-                    + tableIdentifier.namespace()
-                    + "."
-                    + tableIdentifier.name());
+                "urn:polaris:" + tableIdentifier.namespace() + "." + tableIdentifier.name());
 
     return ol.newDatasourceDatasetFacetBuilder()
         .name(uri.getScheme() == null ? "polaris" : uri.getScheme())

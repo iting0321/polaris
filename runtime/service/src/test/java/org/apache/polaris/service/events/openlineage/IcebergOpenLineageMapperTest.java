@@ -75,7 +75,8 @@ class IcebergOpenLineageMapperTest {
 
     assertThat(event.path("eventType").asText()).isEqualTo("COMPLETE");
     assertThat(event.at("/job/namespace").asText()).isEqualTo("polaris.POLARIS.catalog1");
-    assertThat(event.at("/job/name").asText()).isEqualTo("after_create_table:db_sales.daily_orders");
+    assertThat(event.at("/job/name").asText())
+        .isEqualTo("after_create_table:db_sales.daily_orders");
     assertThat(event.at("/run/facets/processing_engine/name").asText()).isEqualTo("polaris");
     assertThat(event.at("/outputs/0/namespace").asText()).isEqualTo("db_sales");
     assertThat(event.at("/outputs/0/name").asText()).isEqualTo("daily_orders");
