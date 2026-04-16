@@ -28,12 +28,15 @@ import org.apache.iceberg.TableMetadata;
 import org.apache.iceberg.TableMetadataParser;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.TableIdentifier;
+import org.apache.iceberg.rest.requests.UpdateTableRequest;
 import org.apache.iceberg.rest.responses.LoadTableResponse;
+import org.apache.iceberg.UpdateRequirement;
 import org.apache.polaris.core.admin.model.Catalog;
 import org.apache.polaris.core.auth.PolarisPrincipal;
 import org.apache.polaris.service.events.EventAttributes;
 import org.apache.polaris.service.events.PolarisEvent;
 import org.apache.polaris.service.events.PolarisEventType;
+import org.apache.polaris.service.events.openlineage.OpenLineageCreateTracker;
 import org.apache.polaris.service.events.openlineage.IcebergOpenLineageMapper;
 import org.apache.polaris.service.events.openlineage.OpenLineageConfiguration;
 import org.apache.polaris.service.events.openlineage.OpenLineageInputTracker;
@@ -51,6 +54,7 @@ public abstract class PolarisPersistenceEventListener implements PolarisEventLis
    */
   @Inject OpenLineageConfiguration openLineageConfig;
   @Inject OpenLineageInputTracker openLineageInputTracker;
+  @Inject OpenLineageCreateTracker openLineageCreateTracker;
 
   // ---------- PolarisEventListener ----------
 
@@ -112,6 +116,9 @@ public abstract class PolarisPersistenceEventListener implements PolarisEventLis
             .put("metadata", TableMetadataParser.toJson(tableMetadata));
 
     if (isOpenLineageEnabled()) {
+      if (openLineageCreateTracker != null) {
+        openLineageCreateTracker.record(tableIdentifier, event.metadata().requestId().orElse(null));
+      }
       try {
         additionalParameters.put(
             "openlineage",
@@ -138,6 +145,12 @@ public abstract class PolarisPersistenceEventListener implements PolarisEventLis
   private void handleAfterUpdateTable(PolarisEvent event) {
     String catalogName = event.attributes().getRequired(EventAttributes.CATALOG_NAME);
     TableIdentifier tableIdentifier = resolveTableIdentifier(event);
+    TableMetadata tableMetadata = event.attributes().getRequired(EventAttributes.TABLE_METADATA);
+    PolarisEventType effectiveEventType =
+        shouldTreatUpdateAsCreate(
+                event, tableIdentifier, tableMetadata, event.metadata().requestId().orElse(null))
+            ? PolarisEventType.AFTER_CREATE_TABLE
+            : PolarisEventType.AFTER_UPDATE_TABLE;
 
     org.apache.polaris.core.entity.PolarisEvent polarisEvent =
         new org.apache.polaris.core.entity.PolarisEvent(
@@ -150,7 +163,6 @@ public abstract class PolarisPersistenceEventListener implements PolarisEventLis
             org.apache.polaris.core.entity.PolarisEvent.ResourceType.TABLE,
             tableIdentifier.toString());
 
-    TableMetadata tableMetadata = event.attributes().getRequired(EventAttributes.TABLE_METADATA);
     var additionalParameters = ImmutableMap.<String, String>builder();
     if (tableMetadata != null) {
       additionalParameters.put("table-uuid", tableMetadata.uuid());
@@ -164,10 +176,12 @@ public abstract class PolarisPersistenceEventListener implements PolarisEventLis
                   openLineageProducerUri(),
                   catalogName,
                   event.metadata().realmId(),
-                  PolarisEventType.AFTER_UPDATE_TABLE,
+                  effectiveEventType,
                   event.metadata().requestId().orElse(null),
                   event.metadata().timestamp(),
-                  List.of(),
+                  effectiveEventType == PolarisEventType.AFTER_CREATE_TABLE
+                      ? resolveCreateInputs(tableIdentifier, tableMetadata)
+                      : List.of(),
                   tableIdentifier,
                   tableMetadata));
         } catch (RuntimeException e) {
@@ -262,6 +276,31 @@ public abstract class PolarisPersistenceEventListener implements PolarisEventLis
       return List.of();
     }
     return openLineageInputTracker.inputsFor(tableIdentifier, tableMetadata);
+  }
+
+  private boolean shouldTreatUpdateAsCreate(
+      PolarisEvent event, TableIdentifier tableIdentifier, TableMetadata tableMetadata, String requestId) {
+    if (tableMetadata == null || tableMetadata.currentSnapshot() == null) {
+      return false;
+    }
+    if (tableMetadata.snapshots().size() != 1) {
+      return false;
+    }
+    UpdateTableRequest updateTableRequest =
+        event.attributes().get(EventAttributes.UPDATE_TABLE_REQUEST).orElse(null);
+    if (isCreateUpdateRequest(updateTableRequest)) {
+      return true;
+    }
+    if (openLineageCreateTracker == null) {
+      return false;
+    }
+    return openLineageCreateTracker.consumeIfMatches(tableIdentifier, requestId);
+  }
+
+  private static boolean isCreateUpdateRequest(UpdateTableRequest updateTableRequest) {
+    return updateTableRequest != null
+        && updateTableRequest.requirements().stream()
+            .anyMatch(UpdateRequirement.AssertTableDoesNotExist.class::isInstance);
   }
 
   private static TableIdentifier resolveTableIdentifier(PolarisEvent event) {

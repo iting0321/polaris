@@ -277,15 +277,17 @@ public final class IcebergOpenLineageMapper {
       PolarisEventType eventType,
       TableMetadata metadata,
       Snapshot snapshot) {
-    facetsBuilder
-        .version(
-            ol.newDatasetVersionDatasetFacetBuilder()
-                .datasetVersion(String.valueOf(snapshot.snapshotId()))
-                .build())
-        .lifecycleStateChange(
-            ol.newLifecycleStateChangeDatasetFacetBuilder()
-                .lifecycleStateChange(mapLifecycleState(eventType, metadata, snapshot))
-                .build());
+    facetsBuilder.version(
+        ol.newDatasetVersionDatasetFacetBuilder()
+            .datasetVersion(String.valueOf(snapshot.snapshotId()))
+            .build());
+
+    if (eventType != PolarisEventType.AFTER_LOAD_TABLE) {
+      facetsBuilder.lifecycleStateChange(
+          ol.newLifecycleStateChangeDatasetFacetBuilder()
+              .lifecycleStateChange(mapLifecycleState(eventType, metadata, snapshot))
+              .build());
+    }
   }
 
   private static OpenLineage.LifecycleStateChangeDatasetFacet.LifecycleStateChange

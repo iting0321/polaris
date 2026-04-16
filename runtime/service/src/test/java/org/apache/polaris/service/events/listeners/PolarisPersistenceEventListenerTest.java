@@ -41,6 +41,7 @@ import org.apache.polaris.service.events.EventAttributes;
 import org.apache.polaris.service.events.ImmutablePolarisEventMetadata;
 import org.apache.polaris.service.events.PolarisEvent;
 import org.apache.polaris.service.events.PolarisEventType;
+import org.apache.polaris.service.events.openlineage.OpenLineageCreateTracker;
 import org.apache.polaris.service.events.openlineage.OpenLineageInputTracker;
 import org.junit.jupiter.api.Test;
 
@@ -158,6 +159,7 @@ class PolarisPersistenceEventListenerTest {
   void afterCreateTableIncludesTrackedInputDatasetsForCtas() throws Exception {
     CaptureListener listener = new CaptureListener();
     listener.openLineageInputTracker = new OpenLineageInputTracker();
+    listener.openLineageCreateTracker = new OpenLineageCreateTracker();
 
     TableMetadata sourceTableMetadata =
         buildTableMetadataWithSnapshot("source-uuid", "file:///tmp/warehouse/db_src/source");
@@ -197,6 +199,68 @@ class PolarisPersistenceEventListenerTest {
     assertThat(openLineage.at("/inputs/0/name").asText()).isEqualTo("source");
     assertThat(openLineage.at("/outputs/0/namespace").asText()).isEqualTo("db_out");
     assertThat(openLineage.at("/outputs/0/name").asText()).isEqualTo("target");
+  }
+
+  @Test
+  void firstUpdateAfterCreateIsPublishedAsCreateForCtas() throws Exception {
+    CaptureListener listener = new CaptureListener();
+    listener.openLineageInputTracker = new OpenLineageInputTracker();
+    listener.openLineageCreateTracker = new OpenLineageCreateTracker();
+
+    TableMetadata sourceTableMetadata =
+        buildTableMetadataWithSnapshot("source-uuid", "file:///tmp/warehouse/db_src/source");
+    listener.onEvent(
+        new PolarisEvent(
+            PolarisEventType.AFTER_LOAD_TABLE,
+            ImmutablePolarisEventMetadata.builder()
+                .realmId("test-realm")
+                .requestId("req-ctas")
+                .build(),
+            new EventAttributeMap()
+                .put(EventAttributes.CATALOG_NAME, "test-catalog")
+                .put(EventAttributes.NAMESPACE, Namespace.of("db_src"))
+                .put(EventAttributes.TABLE_NAME, "source")
+                .put(
+                    EventAttributes.LOAD_TABLE_RESPONSE,
+                    LoadTableResponse.builder().withTableMetadata(sourceTableMetadata).build())));
+
+    TableMetadata targetTableMetadata =
+        buildTableMetadataWithSnapshot("target-uuid", "file:///tmp/warehouse/db_out/target");
+    listener.onEvent(
+        new PolarisEvent(
+            PolarisEventType.AFTER_CREATE_TABLE,
+            ImmutablePolarisEventMetadata.builder()
+                .realmId("test-realm")
+                .requestId("req-ctas")
+                .build(),
+            new EventAttributeMap()
+                .put(EventAttributes.CATALOG_NAME, "test-catalog")
+                .put(EventAttributes.NAMESPACE, Namespace.of("db_out"))
+                .put(EventAttributes.TABLE_NAME, "target")
+                .put(
+                    EventAttributes.LOAD_TABLE_RESPONSE,
+                    LoadTableResponse.builder().withTableMetadata(buildTableMetadata()).build())));
+
+    listener.onEvent(
+        new PolarisEvent(
+            PolarisEventType.AFTER_UPDATE_TABLE,
+            ImmutablePolarisEventMetadata.builder()
+                .realmId("test-realm")
+                .requestId("req-ctas")
+                .build(),
+            new EventAttributeMap()
+                .put(EventAttributes.CATALOG_NAME, "test-catalog")
+                .put(EventAttributes.TABLE_IDENTIFIER, TableIdentifier.of("db_out", "target"))
+                .put(EventAttributes.TABLE_METADATA, targetTableMetadata)));
+
+    var openLineage =
+        OBJECT_MAPPER.readTree(
+            listener.persistedEvent.getAdditionalPropertiesAsMap().get("openlineage"));
+    assertThat(openLineage.at("/job/name").asText()).isEqualTo("after_create_table:db_out.target");
+    assertThat(openLineage.at("/inputs/0/namespace").asText()).isEqualTo("db_src");
+    assertThat(openLineage.at("/inputs/0/name").asText()).isEqualTo("source");
+    assertThat(openLineage.at("/outputs/0/facets/lifecycleStateChange/lifecycleStateChange").asText())
+        .isEqualTo("CREATE");
   }
 
   // ---------- AFTER_DROP_TABLE ----------

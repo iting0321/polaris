@@ -190,6 +190,54 @@ class IcebergOpenLineageMapperTest {
   }
 
   @Test
+  void createRunEventInputDatasetsDoNotExposeLifecycleForLoadEvents() throws Exception {
+    Snapshot sourceSnapshot =
+        new StubSnapshot(55L, "append", Map.of("total-records", "2", "total-file-size", "1024"));
+    TableMetadata sourceTableMetadata =
+        TableMetadata.buildFromEmpty()
+            .assignUUID("source-uuid")
+            .setLocation("file:///tmp/warehouse/db/source")
+            .addSchema(
+                new Schema(List.of(Types.NestedField.required(1, "id", Types.IntegerType.get()))))
+            .addPartitionSpec(PartitionSpec.unpartitioned())
+            .addSortOrder(SortOrder.unsorted())
+            .setBranchSnapshot(sourceSnapshot, "main")
+            .build();
+    Snapshot targetSnapshot =
+        new StubSnapshot(56L, "append", Map.of("total-records", "2", "total-file-size", "1024"));
+    TableMetadata targetTableMetadata =
+        TableMetadata.buildFromEmpty()
+            .assignUUID("target-uuid")
+            .setLocation("file:///tmp/warehouse/db/target")
+            .addSchema(
+                new Schema(List.of(Types.NestedField.required(1, "id", Types.IntegerType.get()))))
+            .addPartitionSpec(PartitionSpec.unpartitioned())
+            .addSortOrder(SortOrder.unsorted())
+            .setBranchSnapshot(targetSnapshot, "main")
+            .build();
+
+    var event =
+        OBJECT_MAPPER.readTree(
+            IcebergOpenLineageMapper.toTableRunEventJson(
+                TEST_PRODUCER,
+                "catalog1",
+                "POLARIS",
+                PolarisEventType.AFTER_CREATE_TABLE,
+                "req-43d",
+                Instant.parse("2026-01-01T00:00:00Z"),
+                List.of(
+                    new IcebergOpenLineageMapper.LineageDataset(
+                        TableIdentifier.of("db_src", "orders_raw"), sourceTableMetadata)),
+                TableIdentifier.of("db_out", "sales_report"),
+                targetTableMetadata));
+
+    assertThat(event.at("/inputs/0/facets/version/datasetVersion").asText()).isEqualTo("55");
+    assertThat(event.at("/inputs/0/facets/lifecycleStateChange").isMissingNode()).isTrue();
+    assertThat(event.at("/outputs/0/facets/lifecycleStateChange/lifecycleStateChange").asText())
+        .isEqualTo("CREATE");
+  }
+
+  @Test
   void omitsSnapshotFacetsWhenCurrentSnapshotIsMissing() throws Exception {
     TableMetadata tableMetadata =
         TableMetadata.buildFromEmpty()
