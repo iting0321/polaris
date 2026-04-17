@@ -47,17 +47,10 @@ public abstract class PolarisPersistenceEventListener implements PolarisEventLis
   private static final Logger LOGGER =
       LoggerFactory.getLogger(PolarisPersistenceEventListener.class);
 
-  /**
-   * Injected by CDI when running inside the Quarkus container. May be {@code null} in plain unit
-   * tests (where CDI is not active); in that case {@link #isOpenLineageEnabled()} defaults to
-   * {@code true} and the producer URI falls back to a default value.
-   */
   @Inject OpenLineageConfiguration openLineageConfig;
 
   @Inject OpenLineageInputTracker openLineageInputTracker;
   @Inject OpenLineageCreateTracker openLineageCreateTracker;
-
-  // ---------- PolarisEventListener ----------
 
   @Override
   public void onEvent(PolarisEvent event) {

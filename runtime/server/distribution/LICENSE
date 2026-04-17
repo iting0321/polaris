@@ -432,7 +432,6 @@ License: Eclipse Public License 2.0 - https://projects.eclipse.org/license/epl-2
 
 This product bundles JBoss Logging.
 
-
 * Maven group:artifact IDs: org.jboss.logging:jboss-logging
 * Maven group:artifact IDs: org.jboss.logmanager:jboss-logmanager
 
