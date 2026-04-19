@@ -181,12 +181,20 @@ public final class OpenLineageCliMain {
     System.out.println("Marquez API: http://localhost:5000");
     System.out.println("Marquez UI: http://localhost:3000");
     System.out.println("Marquez Lineage Endpoint: http://localhost:5000/api/v1/lineage");
+    printPolarisRequirement();
   }
 
   private static void printConnectionInfo(OpenLineageEnvironment env) {
     System.out.println("Marquez API: " + env.marquezApiUrl());
     System.out.println("Marquez UI: " + env.marquezWebUrl());
     System.out.println("Marquez Lineage Endpoint: " + env.marquezLineageUrl());
+    printPolarisRequirement();
+  }
+
+  private static void printPolarisRequirement() {
+    System.out.println(
+        "Polaris must be started with POLARIS_OPENLINEAGE_ENABLED=true and "
+            + "POLARIS_EVENT_LISTENER_TYPES=persistence-http-openlineage.");
   }
 
   private static String joinArgs(String[] args, int startIndex) {
@@ -203,5 +211,11 @@ public final class OpenLineageCliMain {
     System.out.println("  ./gradlew :polaris-openlineage-testcontainer:run --args='demo'");
     System.out.println("  ./gradlew :polaris-openlineage-testcontainer:run --args='shell'");
     System.out.println("  ./gradlew :polaris-openlineage-testcontainer:run --args='sql SHOW TABLES IN db_src;'");
+    System.out.println();
+    System.out.println("Required Polaris startup flags:");
+    System.out.println("  POLARIS_OPENLINEAGE_ENABLED=true");
+    System.out.println("  POLARIS_EVENT_LISTENER_TYPES=persistence-http-openlineage");
+    System.out.println(
+        "  POLARIS_EVENT_LISTENER_PERSISTENCE_HTTP_OPENLINEAGE_ENDPOINT=http://localhost:5000/api/v1/lineage");
   }
 }

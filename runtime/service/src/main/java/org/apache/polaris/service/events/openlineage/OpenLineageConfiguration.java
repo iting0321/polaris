@@ -37,9 +37,9 @@ public interface OpenLineageConfiguration {
    * Whether OpenLineage dataset facet emission is enabled. When disabled, no {@code openlineage}
    * key is written to event additional properties.
    *
-   * <p>Default: {@code true}
+   * <p>Default: {@code false}
    */
-  @WithDefault("true")
+  @WithDefault("false")
   boolean enabled();
 
   /**
