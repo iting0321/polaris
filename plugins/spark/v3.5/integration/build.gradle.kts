@@ -92,6 +92,9 @@ dependencies {
     // exclude old slf4j 1.x to log4j 2.x bridge that conflicts with slf4j 2.x bridge
     exclude("org.apache.logging.log4j", "log4j-slf4j-impl")
   }
+  testImplementation("org.apache.paimon:paimon-spark-3.5_${scalaVersion}:1.4.1") {
+    exclude("org.apache.spark", "*")
+  }
 
   // The hudi-spark-bundle includes most Hive libraries but excludes hive-exec to keep size
   // manageable
@@ -132,6 +135,12 @@ dependencies {
   testImplementation(enforcedPlatform("org.scala-lang:scala-reflect:${scalaLibraryVersion}"))
   testImplementation(libs.javax.servlet.api)
   testImplementation(libs.antlr4.runtime)
+}
+
+configurations.configureEach {
+  resolutionStrategy.capabilitiesResolution.withCapability("org.lz4:lz4-java") {
+    select("org.lz4:lz4-java:1.8.0")
+  }
 }
 
 tasks.named<Test>("intTest").configure {
