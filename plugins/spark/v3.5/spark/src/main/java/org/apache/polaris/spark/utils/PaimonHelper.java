@@ -21,7 +21,10 @@ package org.apache.polaris.spark.utils;
 
 import org.apache.iceberg.common.DynConstructors;
 import org.apache.polaris.spark.PolarisSparkCatalog;
+import org.apache.spark.sql.connector.catalog.CatalogExtension;
+import org.apache.spark.sql.connector.catalog.CatalogPlugin;
 import org.apache.spark.sql.connector.catalog.DelegatingCatalogExtension;
+import org.apache.spark.sql.connector.catalog.SupportsNamespaces;
 import org.apache.spark.sql.connector.catalog.TableCatalog;
 import org.apache.spark.sql.util.CaseInsensitiveStringMap;
 
@@ -29,9 +32,10 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap;
  * Helper class for integrating Apache Paimon table functionality with Polaris Spark Catalog.
  *
  * <p>This class is responsible for dynamically loading and configuring a Paimon Catalog
- * implementation to work with Polaris. It sets up the Paimon Catalog as a delegating catalog
- * extension with Polaris Spark Catalog as the delegate, enabling Paimon table operations through
- * Polaris.
+ * implementation to work with Polaris. The default Paimon Spark catalog is a standalone catalog
+ * that must be initialized with its own catalog options before it can create Paimon metadata. When
+ * the loaded catalog also supports Spark's catalog extension APIs, this helper wires Polaris as the
+ * delegate catalog.
  *
  * <p>Apache Paimon is a streaming data lake platform with high-speed data ingestion, changelog
  * tracking and efficient real-time analytics. This helper enables Polaris to manage Paimon tables
@@ -42,18 +46,28 @@ public class PaimonHelper {
   private static final String DEFAULT_PAIMON_CATALOG_CLASS = "org.apache.paimon.spark.SparkCatalog";
 
   private TableCatalog paimonCatalog = null;
-  private String paimonCatalogImpl = DEFAULT_PAIMON_CATALOG_CLASS;
+  private final String paimonCatalogImpl;
+  private final String paimonWarehouse;
+  private final String catalogName;
+  private final CaseInsensitiveStringMap options;
+
+  public PaimonHelper(String catalogName, CaseInsensitiveStringMap options) {
+    this.catalogName = catalogName;
+    this.options = options;
+    this.paimonCatalogImpl =
+        options.get(PAIMON_CATALOG_IMPL_KEY) != null
+            ? options.get(PAIMON_CATALOG_IMPL_KEY)
+            : DEFAULT_PAIMON_CATALOG_CLASS;
+    this.paimonWarehouse = options.get(PAIMON_WAREHOUSE_KEY);
+  }
 
   public PaimonHelper(CaseInsensitiveStringMap options) {
-    if (options.get(PAIMON_CATALOG_IMPL_KEY) != null) {
-      this.paimonCatalogImpl = options.get(PAIMON_CATALOG_IMPL_KEY);
-    }
+    this("paimon", options);
   }
 
   /**
-   * Load and configure the Paimon catalog with Polaris Spark Catalog as the delegate.
+   * Load and configure the Paimon catalog.
    *
-   * @param polarisSparkCatalog the Polaris Spark Catalog to set as delegate
    * @return the configured Paimon TableCatalog
    */
   public TableCatalog loadPaimonCatalog(PolarisSparkCatalog polarisSparkCatalog) {
@@ -81,13 +95,41 @@ public class PaimonHelper {
           e);
     }
 
-    // Set the Polaris Spark Catalog as the delegate catalog of Paimon Catalog.
-    // This allows Paimon to use Polaris for metadata management while handling
-    // Paimon-specific operations like manifest and snapshot management.
-    if (this.paimonCatalog instanceof DelegatingCatalogExtension) {
-      ((DelegatingCatalogExtension) this.paimonCatalog).setDelegateCatalog(polarisSparkCatalog);
-    }
+    ((CatalogPlugin) catalog).initialize(this.catalogName + "_paimon", paimonCatalogOptions());
+    this.paimonCatalog = catalog;
 
     return this.paimonCatalog;
+  }
+
+  public synchronized TableCatalog loadPaimonCatalog(PolarisSparkCatalog polarisSparkCatalog) {
+    TableCatalog catalog = loadPaimonCatalog();
+    if (catalog instanceof DelegatingCatalogExtension delegatingCatalogExtension) {
+      delegatingCatalogExtension.setDelegateCatalog(polarisSparkCatalog);
+    } else if (catalog instanceof CatalogExtension catalogExtension) {
+      catalogExtension.setDelegateCatalog(polarisSparkCatalog);
+    }
+    return catalog;
+  }
+
+  public void ensureNamespaceExists(String[] namespace) {
+    if (this.paimonCatalog instanceof SupportsNamespaces supportsNamespaces
+        && !supportsNamespaces.namespaceExists(namespace)) {
+      try {
+        supportsNamespaces.createNamespace(namespace, new HashMap<>());
+      } catch (Exception e) {
+        // Namespace might already exist due to a concurrent create.
+      }
+    }
+  }
+
+  private CaseInsensitiveStringMap paimonCatalogOptions() {
+    Map<String, String> paimonOptions = new HashMap<>(options.asCaseSensitiveMap());
+    paimonOptions.remove(PAIMON_CATALOG_IMPL_KEY);
+    paimonOptions.remove(PAIMON_WAREHOUSE_KEY);
+    String paimonWarehouse = options.get(PAIMON_WAREHOUSE_KEY);
+    if (paimonWarehouse != null) {
+      paimonOptions.put("warehouse", paimonWarehouse);
+    }
+    return new CaseInsensitiveStringMap(paimonOptions);
   }
 }

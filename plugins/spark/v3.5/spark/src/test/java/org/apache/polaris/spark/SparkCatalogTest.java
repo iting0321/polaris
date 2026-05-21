@@ -46,6 +46,7 @@ import org.apache.spark.sql.catalyst.analysis.NoSuchViewException;
 import org.apache.spark.sql.catalyst.analysis.TableAlreadyExistsException;
 import org.apache.spark.sql.connector.catalog.Identifier;
 import org.apache.spark.sql.connector.catalog.NamespaceChange;
+import org.apache.spark.sql.connector.catalog.SupportsNamespaces;
 import org.apache.spark.sql.connector.catalog.Table;
 import org.apache.spark.sql.connector.catalog.TableCatalog;
 import org.apache.spark.sql.connector.catalog.TableChange;
@@ -585,6 +586,65 @@ public class SparkCatalogTest {
     assertThatThrownBy(
             () -> catalog.renameTable(csvIdent, Identifier.of(defaultNS, "new-csv-table")))
         .isInstanceOf(UnsupportedOperationException.class);
+  }
+
+  @Test
+  void testPaimonCreateKeepsPaimonTableWhenPolarisRegistrationFailsForRetry() throws Exception {
+    Identifier identifier = Identifier.of(new String[] {"missing_ns"}, "paimon-table");
+    Map<String, String> properties = Maps.newHashMap();
+    properties.put(PolarisCatalogUtils.TABLE_PROVIDER_KEY, "paimon");
+    properties.put(TableCatalog.PROP_LOCATION, "file:///tmp/paimon/path/to/table/paimon-table/");
+
+    assertThatThrownBy(
+            () -> catalog.createTable(identifier, defaultSchema, new Transform[0], properties))
+        .isInstanceOf(RuntimeException.class)
+        .hasMessageContaining("Polaris registration failed")
+        .hasMessageContaining("Please retry the create table request");
+
+    TableCatalog paimonCatalog =
+        catalog.paimonHelper.loadPaimonCatalog(catalog.polarisSparkCatalog);
+    Table paimonTable = paimonCatalog.loadTable(identifier);
+
+    catalog.createNamespace(identifier.namespace(), Maps.newHashMap());
+    Table retryTable = catalog.createTable(identifier, defaultSchema, new Transform[0], properties);
+
+    assertThat(retryTable).isSameAs(paimonTable);
+    assertThat(catalog.listTables(identifier.namespace())).contains(identifier);
+  }
+
+  @Test
+  @SuppressWarnings("deprecation")
+  void testPaimonCreateRegistersExistingPaimonTableInPolaris() throws Exception {
+    Identifier identifier = Identifier.of(defaultNS, "existing-paimon-table");
+    Map<String, String> properties = Maps.newHashMap();
+    properties.put(PolarisCatalogUtils.TABLE_PROVIDER_KEY, "paimon");
+    properties.put(TableCatalog.PROP_LOCATION, "file:///tmp/paimon/path/to/table/existing/");
+
+    TableCatalog paimonCatalog = catalog.paimonHelper.loadPaimonCatalog();
+    ((SupportsNamespaces) paimonCatalog).createNamespace(defaultNS, Maps.newHashMap());
+    Table paimonTable =
+        paimonCatalog.createTable(identifier, defaultSchema, new Transform[0], properties);
+
+    Table createdTable =
+        catalog.createTable(identifier, defaultSchema, new Transform[0], properties);
+
+    assertThat(createdTable).isSameAs(paimonTable);
+    assertThat(catalog.listTables(defaultNS)).contains(identifier);
+  }
+
+  @Test
+  void testPaimonCreateReturnsWhenAlreadyRegisteredInPolaris() throws Exception {
+    Identifier identifier = Identifier.of(defaultNS, "registered-paimon-table");
+    Map<String, String> properties = Maps.newHashMap();
+    properties.put(PolarisCatalogUtils.TABLE_PROVIDER_KEY, "paimon");
+    properties.put(TableCatalog.PROP_LOCATION, "file:///tmp/paimon/path/to/table/registered/");
+
+    Table firstCreate =
+        catalog.createTable(identifier, defaultSchema, new Transform[0], properties);
+    Table secondCreate =
+        catalog.createTable(identifier, defaultSchema, new Transform[0], properties);
+
+    assertThat(secondCreate).isSameAs(firstCreate);
   }
 
   @Test

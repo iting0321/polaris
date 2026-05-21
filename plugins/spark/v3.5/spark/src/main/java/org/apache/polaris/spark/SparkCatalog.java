@@ -29,6 +29,7 @@ import org.apache.iceberg.CatalogUtil;
 import org.apache.iceberg.rest.auth.OAuth2Util;
 import org.apache.iceberg.spark.SupportsReplaceView;
 import org.apache.iceberg.util.PropertyUtil;
+import org.apache.polaris.spark.exceptions.PaimonRegistrationException;
 import org.apache.polaris.spark.utils.DeltaHelper;
 import org.apache.polaris.spark.utils.HudiHelper;
 import org.apache.polaris.spark.utils.PaimonHelper;
@@ -39,6 +40,7 @@ import org.apache.spark.sql.catalyst.analysis.NoSuchTableException;
 import org.apache.spark.sql.catalyst.analysis.NoSuchViewException;
 import org.apache.spark.sql.catalyst.analysis.TableAlreadyExistsException;
 import org.apache.spark.sql.catalyst.analysis.ViewAlreadyExistsException;
+import org.apache.spark.sql.connector.catalog.DelegatingCatalogExtension;
 import org.apache.spark.sql.connector.catalog.Identifier;
 import org.apache.spark.sql.connector.catalog.NamespaceChange;
 import org.apache.spark.sql.connector.catalog.StagedTable;
@@ -155,6 +157,45 @@ public class SparkCatalog
     String provider = properties.get(PolarisCatalogUtils.TABLE_PROVIDER_KEY);
     if (PolarisCatalogUtils.useIceberg(provider)) {
       return this.icebergsSparkCatalog.createTable(ident, schema, transforms, properties);
+    } else if (PolarisCatalogUtils.usePaimon(provider)) {
+      TableCatalog paimonCatalog = paimonHelper.loadPaimonCatalog();
+
+      if (isRegisteredInPolaris(ident)) {
+        return loadRegisteredPaimonTable(ident, paimonCatalog);
+      }
+
+      Table paimonTable = loadPaimonTableIfExists(paimonCatalog, ident);
+      boolean createdPaimonTable = false;
+      if (paimonTable == null) {
+        paimonHelper.ensureNamespaceExists(ident.namespace());
+        paimonTable = paimonCatalog.createTable(ident, schema, transforms, properties);
+        createdPaimonTable = true;
+      }
+
+      String tableLocation = paimonTable.properties().get(TableCatalog.PROP_LOCATION);
+      if (tableLocation == null) {
+        tableLocation = properties.get(TableCatalog.PROP_LOCATION);
+      }
+      if (tableLocation == null) {
+        tableLocation = properties.get(PolarisCatalogUtils.TABLE_PATH_KEY);
+      }
+      if (tableLocation == null) {
+        throw new IllegalStateException(
+            String.format(
+                "Paimon table %s does not expose a location for Polaris registration.", ident));
+      }
+
+      Map<String, String> registrationProps = new java.util.HashMap<>(properties);
+      registrationProps.put(TableCatalog.PROP_LOCATION, tableLocation);
+      try {
+        this.polarisSparkCatalog.registerGenericTable(
+            ident, provider, tableLocation, registrationProps);
+      } catch (TableAlreadyExistsException e) {
+        return paimonTable;
+      } catch (NoSuchNamespaceException | RuntimeException e) {
+        throw new PaimonRegistrationException(ident, e, createdPaimonTable);
+      }
+      return paimonTable;
     } else {
       if (PolarisCatalogUtils.isTableWithSparkManagedLocation(properties)) {
         throw new UnsupportedOperationException(
@@ -174,7 +215,29 @@ public class SparkCatalog
         // For creating the paimon table, we load PaimonCatalog
         // to create the paimon metadata in cloud storage
         TableCatalog paimonCatalog = paimonHelper.loadPaimonCatalog(this.polarisSparkCatalog);
-        return paimonCatalog.createTable(ident, schema, transforms, properties);
+        Map<String, String> paimonProperties = Maps.newHashMap(properties);
+        paimonProperties.remove(TableCatalog.PROP_LOCATION);
+        paimonProperties.remove(PolarisCatalogUtils.TABLE_PATH_KEY);
+        if (paimonCatalog instanceof SupportsNamespaces supportsNamespaces
+            && !(paimonCatalog instanceof DelegatingCatalogExtension)
+            && ident.namespace().length > 0) {
+          try {
+            supportsNamespaces.createNamespace(ident.namespace(), Map.of());
+          } catch (NamespaceAlreadyExistsException e) {
+            // Namespace already exists in the Paimon catalog.
+          }
+        }
+        Table paimonTable = paimonCatalog.createTable(ident, schema, transforms, paimonProperties);
+        if (paimonCatalog instanceof DelegatingCatalogExtension) {
+          return paimonTable;
+        }
+        try {
+          return this.polarisSparkCatalog.createTable(ident, schema, transforms, properties);
+        } catch (TableAlreadyExistsException | NoSuchNamespaceException e) {
+          throw new PaimonRegistrationException(ident, e, true);
+        } catch (RuntimeException e) {
+          throw new PaimonRegistrationException(ident, e, true);
+        }
       } else {
         return this.polarisSparkCatalog.createTable(ident, schema, transforms, properties);
       }
@@ -209,7 +272,79 @@ public class SparkCatalog
 
   @Override
   public boolean dropTable(Identifier ident) {
-    return this.icebergsSparkCatalog.dropTable(ident) || this.polarisSparkCatalog.dropTable(ident);
+    // First, try to drop as an Iceberg table
+    if (this.icebergsSparkCatalog.dropTable(ident)) {
+      return true;
+    }
+
+    // For generic tables, check the provider to delegate to the appropriate catalog
+    // Use getTableFormat to avoid triggering Spark DataSource resolution for routing decisions
+    try {
+      String provider = this.polarisSparkCatalog.getTableFormat(ident);
+
+      if (PolarisCatalogUtils.usePaimon(provider)) {
+        // For Paimon tables, drop from Paimon first, then Polaris.
+        try {
+          TableCatalog paimonCatalog = paimonHelper.loadPaimonCatalog();
+          paimonCatalog.dropTable(ident);
+        } catch (Exception e) {
+          LOG.error(
+              "Failed to drop table {} from Paimon catalog. "
+                  + "Polaris metadata will not be removed to maintain consistency: {}",
+              ident,
+              e.getMessage());
+          throw new RuntimeException(
+              String.format("Failed to drop Paimon table %s: %s", ident, e.getMessage()), e);
+        }
+        // Paimon drop succeeded; now remove the Polaris metadata entry
+        boolean droppedFromPolaris = this.polarisSparkCatalog.dropTable(ident);
+        if (!droppedFromPolaris) {
+          LOG.warn(
+              "Paimon table {} data was dropped but Polaris metadata removal failed. "
+                  + "The stale Polaris entry may need manual cleanup.",
+              ident);
+        }
+        return droppedFromPolaris;
+      }
+      // Add other catalog delegations here as needed (e.g., Delta, Hudi for dropTable)
+
+      // Default: drop from Polaris
+      return this.polarisSparkCatalog.dropTable(ident);
+    } catch (NoSuchTableException e) {
+      // Table not found in Polaris
+      LOG.warn("Table {} not found in Polaris catalog during drop operation", ident);
+      return false;
+    }
+  }
+
+  private boolean isRegisteredInPolaris(Identifier ident) {
+    try {
+      return PolarisCatalogUtils.usePaimon(this.polarisSparkCatalog.getTableFormat(ident));
+    } catch (NoSuchTableException e) {
+      return false;
+    }
+  }
+
+  private Table loadRegisteredPaimonTable(Identifier ident, TableCatalog paimonCatalog) {
+    try {
+      return paimonCatalog.loadTable(ident);
+    } catch (NoSuchTableException e) {
+      try {
+        return this.polarisSparkCatalog.loadTable(ident);
+      } catch (NoSuchTableException polarisLoadException) {
+        throw new IllegalStateException(
+            String.format("Paimon table %s is registered in Polaris but cannot be loaded.", ident),
+            polarisLoadException);
+      }
+    }
+  }
+
+  private Table loadPaimonTableIfExists(TableCatalog paimonCatalog, Identifier ident) {
+    try {
+      return paimonCatalog.loadTable(ident);
+    } catch (NoSuchTableException e) {
+      return null;
+    }
   }
 
   @Override
