@@ -86,6 +86,31 @@ request body looks like the following:
 }
 ```
 
+If a table was produced by Apache XTable, keep `format` set to the target table format that
+clients load, such as `hudi`, and record XTable provenance in `properties`.
+
+For example, if XTable produced a Hudi table from a Delta source, the Generic Table request can
+record both the Hudi target location and the Delta source location:
+
+```json
+{
+  "name": "hudi_from_xtable",
+  "format": "hudi",
+  "base-location": "s3://bucket/hudi-table",
+  "doc": "Hudi table produced by Apache XTable",
+  "properties": {
+    "provider": "hudi",
+    "location": "s3://bucket/hudi-table",
+    "polaris.provenance.tool": "xtable",
+    "polaris.provenance.source-format": "delta",
+    "polaris.provenance.source-location": "s3://bucket/delta-table"
+  }
+}
+```
+
+Polaris does not infer these provenance properties. The user, Spark job, or workflow that runs
+XTable must provide them when creating the Generic Table.
+
 Here is an example to create a generic table with name `delta_table` and format as `delta` under a namespace `delta_ns`
 for catalog `delta_catalog` using curl:
 

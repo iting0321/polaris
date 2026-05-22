@@ -129,3 +129,10 @@ The following describes the current limitations of the Polaris Spark client:
 2. Create a Delta table without explicit location is not supported.
 3. Rename a Delta table is not supported.
 4. ALTER TABLE ... SET LOCATION is not supported for DELTA table.
+
+## XTable Table Limitations
+1. Apache XTable is not a standalone Spark table format. Keep `provider` and Generic Table `format`
+   set to the generated target format, such as `hudi`, and record XTable details as provenance
+   properties.
+2. Polaris does not run XTable synchronization. Run XTable separately and point the Generic Table
+   `base-location` at the table location that contains the generated target-format metadata.

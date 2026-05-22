@@ -95,6 +95,9 @@ public abstract class AbstractPolarisGenericTableCatalogTest {
   public static final String TEST_ACCESS_KEY = "test_access_key";
   public static final String SECRET_ACCESS_KEY = "secret_access_key";
   public static final String SESSION_TOKEN = "session_token";
+  private static final String PROVENANCE_TOOL_KEY = "polaris.provenance.tool";
+  private static final String PROVENANCE_SOURCE_FORMAT_KEY = "polaris.provenance.source-format";
+  private static final String PROVENANCE_SOURCE_LOCATION_KEY = "polaris.provenance.source-location";
 
   @Inject ServiceIdentityProvider serviceIdentityProvider;
   @Inject StorageCredentialCache storageCredentialCache;
@@ -315,6 +318,43 @@ public abstract class AbstractPolarisGenericTableCatalogTest {
     Assertions.assertThat(resultEntity.getPropertiesAsMap()).isEqualTo(properties);
     Assertions.assertThat(resultEntity.getName()).isEqualTo(tableName);
     Assertions.assertThat(resultEntity.getBaseLocation()).isEqualTo(baseLocation);
+  }
+
+  @Test
+  public void testHudiGenericTableWithXTableProvenanceRoundTrip() {
+    Namespace namespace = Namespace.of("ns");
+    icebergCatalog.createNamespace(namespace);
+
+    String tableName = "hudi_from_xtable";
+    String hudiLocation = "s3://bucket/hudi-table";
+    String deltaSourceLocation = "s3://bucket/delta-table";
+    Map<String, String> properties =
+        Map.of(
+            "provider",
+            "hudi",
+            "location",
+            hudiLocation,
+            PROVENANCE_TOOL_KEY,
+            "xtable",
+            PROVENANCE_SOURCE_FORMAT_KEY,
+            "delta",
+            PROVENANCE_SOURCE_LOCATION_KEY,
+            deltaSourceLocation);
+
+    genericTableCatalog.createGenericTable(
+        TableIdentifier.of("ns", tableName), "hudi", hudiLocation, null, properties);
+
+    GenericTableEntity resultEntity =
+        genericTableCatalog.loadGenericTable(TableIdentifier.of("ns", tableName));
+
+    Assertions.assertThat(resultEntity.getFormat()).isEqualTo("hudi");
+    Assertions.assertThat(resultEntity.getBaseLocation()).isEqualTo(hudiLocation);
+    Assertions.assertThat(resultEntity.getPropertiesAsMap())
+        .containsEntry("provider", "hudi")
+        .containsEntry("location", hudiLocation)
+        .containsEntry(PROVENANCE_TOOL_KEY, "xtable")
+        .containsEntry(PROVENANCE_SOURCE_FORMAT_KEY, "delta")
+        .containsEntry(PROVENANCE_SOURCE_LOCATION_KEY, deltaSourceLocation);
   }
 
   @Test

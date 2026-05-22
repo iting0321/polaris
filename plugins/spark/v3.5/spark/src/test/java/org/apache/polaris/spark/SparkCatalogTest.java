@@ -588,6 +588,30 @@ public class SparkCatalogTest {
   }
 
   @Test
+  void testHudiTableKeepsXTableProvenanceProperties() throws Exception {
+    Identifier identifier = Identifier.of(defaultNS, "hudi-from-xtable");
+    Map<String, String> properties = Maps.newHashMap();
+    properties.put(PolarisCatalogUtils.TABLE_PROVIDER_KEY, "hudi");
+    properties.put(TableCatalog.PROP_LOCATION, "s3://bucket/hudi-table");
+    properties.put(PolarisCatalogUtils.PROVENANCE_TOOL_KEY, "xtable");
+    properties.put(PolarisCatalogUtils.PROVENANCE_SOURCE_FORMAT_KEY, "delta");
+    properties.put(PolarisCatalogUtils.PROVENANCE_SOURCE_LOCATION_KEY, "s3://bucket/delta-table");
+
+    Table table =
+        catalog.polarisSparkCatalog.createTable(
+            identifier, defaultSchema, new Transform[0], properties);
+
+    assertThat(table.properties())
+        .contains(
+            Map.entry(PolarisCatalogUtils.TABLE_PROVIDER_KEY, "hudi"),
+            Map.entry(TableCatalog.PROP_LOCATION, "s3://bucket/hudi-table"),
+            Map.entry(PolarisCatalogUtils.PROVENANCE_TOOL_KEY, "xtable"),
+            Map.entry(PolarisCatalogUtils.PROVENANCE_SOURCE_FORMAT_KEY, "delta"),
+            Map.entry(
+                PolarisCatalogUtils.PROVENANCE_SOURCE_LOCATION_KEY, "s3://bucket/delta-table"));
+  }
+
+  @Test
   void testPurgeInvalidateTable() throws Exception {
     Identifier icebergIdent = Identifier.of(defaultNS, "iceberg-table");
     Identifier deltaIdent = Identifier.of(defaultNS, "delta-table");

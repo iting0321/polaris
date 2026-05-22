@@ -48,6 +48,9 @@ public class PolarisCatalogUtils {
 
   public static final String TABLE_PROVIDER_KEY = "provider";
   public static final String TABLE_PATH_KEY = "path";
+  public static final String PROVENANCE_TOOL_KEY = "polaris.provenance.tool";
+  public static final String PROVENANCE_SOURCE_FORMAT_KEY = "polaris.provenance.source-format";
+  public static final String PROVENANCE_SOURCE_LOCATION_KEY = "polaris.provenance.source-location";
 
   /** Check whether the table provider is iceberg. */
   public static boolean useIceberg(String provider) {
@@ -84,7 +87,8 @@ public class PolarisCatalogUtils {
    */
   private static Map<String, String> normalizeTablePropertiesForLoadSparkTable(
       GenericTable genericTable) {
-    Map<String, String> properties = genericTable.properties();
+    Map<String, String> properties =
+        genericTable.properties() == null ? Map.of() : genericTable.properties();
     boolean hasLocationClause = properties.get(TableCatalog.PROP_LOCATION) != null;
     boolean hasPathClause = properties.get(TABLE_PATH_KEY) != null;
     Map<String, String> tableProperties = Maps.newHashMap();
