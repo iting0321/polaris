@@ -747,8 +747,14 @@ public class SparkCatalogTest {
             sparkCatalog.createTable(identifier, schema, new Transform[0], properties);
         Table loadedTable = sparkCatalog.loadTable(identifier);
 
-        // verify Spark V1 table is returned for non-iceberg tables
-        assertThat(createdTable).isInstanceOf(V1Table.class);
+        if (PolarisCatalogUtils.usePaimon(format)) {
+          assertThat(createdTable.properties())
+              .containsEntry(
+                  TableCatalog.PROP_LOCATION, properties.get(TableCatalog.PROP_LOCATION));
+        } else {
+          // verify Spark V1 table is returned for non-iceberg tables
+          assertThat(createdTable).isInstanceOf(V1Table.class);
+        }
         assertThat(loadedTable).isInstanceOf(V1Table.class);
       }
     }

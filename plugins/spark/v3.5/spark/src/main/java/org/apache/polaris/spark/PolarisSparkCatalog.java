@@ -127,6 +127,34 @@ public class PolarisSparkCatalog implements TableCatalog {
     }
   }
 
+  public void registerGenericTable(
+      Identifier identifier, String format, String baseLocation, Map<String, String> properties)
+      throws TableAlreadyExistsException, NoSuchNamespaceException {
+    try {
+      this.polarisCatalog.createGenericTable(
+          Spark3Util.identifierToTableIdentifier(identifier),
+          format,
+          baseLocation,
+          null,
+          properties);
+    } catch (AlreadyExistsException e) {
+      throw new TableAlreadyExistsException(identifier);
+    } catch (org.apache.iceberg.exceptions.NoSuchNamespaceException e) {
+      throw new NoSuchNamespaceException(identifier.namespace());
+    }
+  }
+
+  public String getTableFormat(Identifier identifier) throws NoSuchTableException {
+    try {
+      GenericTable genericTable =
+          this.polarisCatalog.loadGenericTable(
+              Spark3Util.identifierToTableIdentifier(identifier));
+      return genericTable.format();
+    } catch (org.apache.iceberg.exceptions.NoSuchTableException e) {
+      throw new NoSuchTableException(identifier);
+    }
+  }
+
   @Override
   public Table alterTable(Identifier identifier, TableChange... changes)
       throws NoSuchTableException {

@@ -31,6 +31,7 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap;
 import org.junit.jupiter.api.Test;
 
 public class PaimonHelperTest {
+  private static final String TEST_WAREHOUSE = "file:///tmp/paimon/warehouse";
 
   @Test
   public void testLoadPaimonCatalogWithNoopPaimonCatalog() {

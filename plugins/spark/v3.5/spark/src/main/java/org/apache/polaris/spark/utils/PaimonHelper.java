@@ -19,10 +19,11 @@
 
 package org.apache.polaris.spark.utils;
 
+import java.util.HashMap;
+import java.util.Map;
 import org.apache.iceberg.common.DynConstructors;
 import org.apache.polaris.spark.PolarisSparkCatalog;
 import org.apache.spark.sql.connector.catalog.CatalogExtension;
-import org.apache.spark.sql.connector.catalog.CatalogPlugin;
 import org.apache.spark.sql.connector.catalog.DelegatingCatalogExtension;
 import org.apache.spark.sql.connector.catalog.SupportsNamespaces;
 import org.apache.spark.sql.connector.catalog.TableCatalog;
@@ -43,11 +44,11 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap;
  */
 public class PaimonHelper {
   public static final String PAIMON_CATALOG_IMPL_KEY = "paimon-catalog-impl";
+  public static final String PAIMON_WAREHOUSE_KEY = "paimon-warehouse";
   private static final String DEFAULT_PAIMON_CATALOG_CLASS = "org.apache.paimon.spark.SparkCatalog";
 
   private TableCatalog paimonCatalog = null;
   private final String paimonCatalogImpl;
-  private final String paimonWarehouse;
   private final String catalogName;
   private final CaseInsensitiveStringMap options;
 
@@ -58,7 +59,6 @@ public class PaimonHelper {
         options.get(PAIMON_CATALOG_IMPL_KEY) != null
             ? options.get(PAIMON_CATALOG_IMPL_KEY)
             : DEFAULT_PAIMON_CATALOG_CLASS;
-    this.paimonWarehouse = options.get(PAIMON_WAREHOUSE_KEY);
   }
 
   public PaimonHelper(CaseInsensitiveStringMap options) {
@@ -70,11 +70,12 @@ public class PaimonHelper {
    *
    * @return the configured Paimon TableCatalog
    */
-  public TableCatalog loadPaimonCatalog(PolarisSparkCatalog polarisSparkCatalog) {
+  public synchronized TableCatalog loadPaimonCatalog() {
     if (this.paimonCatalog != null) {
       return this.paimonCatalog;
     }
 
+    TableCatalog catalog;
     DynConstructors.Ctor<TableCatalog> ctor;
     try {
       ctor = DynConstructors.builder(TableCatalog.class).impl(paimonCatalogImpl).buildChecked();
@@ -86,7 +87,7 @@ public class PaimonHelper {
     }
 
     try {
-      this.paimonCatalog = ctor.newInstance();
+      catalog = ctor.newInstance();
     } catch (ClassCastException e) {
       throw new IllegalArgumentException(
           String.format(
@@ -95,7 +96,7 @@ public class PaimonHelper {
           e);
     }
 
-    ((CatalogPlugin) catalog).initialize(this.catalogName + "_paimon", paimonCatalogOptions());
+    catalog.initialize(this.catalogName + "_paimon", paimonCatalogOptions());
     this.paimonCatalog = catalog;
 
     return this.paimonCatalog;
@@ -112,6 +113,9 @@ public class PaimonHelper {
   }
 
   public void ensureNamespaceExists(String[] namespace) {
+    if (namespace.length == 0) {
+      return;
+    }
     if (this.paimonCatalog instanceof SupportsNamespaces supportsNamespaces
         && !supportsNamespaces.namespaceExists(namespace)) {
       try {

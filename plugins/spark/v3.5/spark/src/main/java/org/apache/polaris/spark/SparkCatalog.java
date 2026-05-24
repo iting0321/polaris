@@ -40,7 +40,6 @@ import org.apache.spark.sql.catalyst.analysis.NoSuchTableException;
 import org.apache.spark.sql.catalyst.analysis.NoSuchViewException;
 import org.apache.spark.sql.catalyst.analysis.TableAlreadyExistsException;
 import org.apache.spark.sql.catalyst.analysis.ViewAlreadyExistsException;
-import org.apache.spark.sql.connector.catalog.DelegatingCatalogExtension;
 import org.apache.spark.sql.connector.catalog.Identifier;
 import org.apache.spark.sql.connector.catalog.NamespaceChange;
 import org.apache.spark.sql.connector.catalog.StagedTable;
@@ -55,6 +54,8 @@ import org.apache.spark.sql.connector.catalog.ViewChange;
 import org.apache.spark.sql.connector.expressions.Transform;
 import org.apache.spark.sql.types.StructType;
 import org.apache.spark.sql.util.CaseInsensitiveStringMap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * SparkCatalog Implementation that is able to interact with both Iceberg SparkCatalog and Polaris
@@ -68,6 +69,7 @@ public class SparkCatalog
         SupportsNamespaces,
         ViewCatalog,
         SupportsReplaceView {
+  private static final Logger LOG = LoggerFactory.getLogger(SparkCatalog.class);
 
   @VisibleForTesting protected String catalogName = null;
   @VisibleForTesting protected org.apache.iceberg.spark.SparkCatalog icebergsSparkCatalog = null;
@@ -174,6 +176,9 @@ public class SparkCatalog
 
       String tableLocation = paimonTable.properties().get(TableCatalog.PROP_LOCATION);
       if (tableLocation == null) {
+        tableLocation = paimonTable.properties().get(PolarisCatalogUtils.TABLE_PATH_KEY);
+      }
+      if (tableLocation == null) {
         tableLocation = properties.get(TableCatalog.PROP_LOCATION);
       }
       if (tableLocation == null) {
@@ -191,7 +196,10 @@ public class SparkCatalog
         this.polarisSparkCatalog.registerGenericTable(
             ident, provider, tableLocation, registrationProps);
       } catch (TableAlreadyExistsException e) {
-        return paimonTable;
+        if (isRegisteredInPolaris(ident)) {
+          return paimonTable;
+        }
+        throw e;
       } catch (NoSuchNamespaceException | RuntimeException e) {
         throw new PaimonRegistrationException(ident, e, createdPaimonTable);
       }
@@ -211,33 +219,6 @@ public class SparkCatalog
         // to create the .hoodie folder in cloud storage
         TableCatalog hudiCatalog = hudiHelper.loadHudiCatalog(this.polarisSparkCatalog);
         return hudiCatalog.createTable(ident, schema, transforms, properties);
-      } else if (PolarisCatalogUtils.usePaimon(provider)) {
-        // For creating the paimon table, we load PaimonCatalog
-        // to create the paimon metadata in cloud storage
-        TableCatalog paimonCatalog = paimonHelper.loadPaimonCatalog(this.polarisSparkCatalog);
-        Map<String, String> paimonProperties = Maps.newHashMap(properties);
-        paimonProperties.remove(TableCatalog.PROP_LOCATION);
-        paimonProperties.remove(PolarisCatalogUtils.TABLE_PATH_KEY);
-        if (paimonCatalog instanceof SupportsNamespaces supportsNamespaces
-            && !(paimonCatalog instanceof DelegatingCatalogExtension)
-            && ident.namespace().length > 0) {
-          try {
-            supportsNamespaces.createNamespace(ident.namespace(), Map.of());
-          } catch (NamespaceAlreadyExistsException e) {
-            // Namespace already exists in the Paimon catalog.
-          }
-        }
-        Table paimonTable = paimonCatalog.createTable(ident, schema, transforms, paimonProperties);
-        if (paimonCatalog instanceof DelegatingCatalogExtension) {
-          return paimonTable;
-        }
-        try {
-          return this.polarisSparkCatalog.createTable(ident, schema, transforms, properties);
-        } catch (TableAlreadyExistsException | NoSuchNamespaceException e) {
-          throw new PaimonRegistrationException(ident, e, true);
-        } catch (RuntimeException e) {
-          throw new PaimonRegistrationException(ident, e, true);
-        }
       } else {
         return this.polarisSparkCatalog.createTable(ident, schema, transforms, properties);
       }
