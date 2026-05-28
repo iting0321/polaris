@@ -156,7 +156,8 @@ public class SparkCatalog
     if (PolarisCatalogUtils.useIceberg(provider)) {
       return this.icebergsSparkCatalog.createTable(ident, schema, transforms, properties);
     } else {
-      if (PolarisCatalogUtils.isTableWithSparkManagedLocation(properties)) {
+      if (!PolarisCatalogUtils.usePaimon(provider)
+          && PolarisCatalogUtils.isTableWithSparkManagedLocation(properties)) {
         throw new UnsupportedOperationException(
             "Create table without location key is not supported by Polaris. Please provide location or path on table creation.");
       }
