@@ -664,7 +664,7 @@ public class PolarisAdminServiceTest {
                     catalogName, catalogRoleName, identifier, privilege))
         .isInstanceOf(RuntimeException.class)
         .hasMessage(
-            "Failed to create or find table entity 'test-table' in federated catalog 'test-catalog'");
+            "Failed to create or find table-like entity 'test-table' in federated catalog 'test-catalog'");
   }
 
   private PolarisEntity createEntity(String name, PolarisEntityType type) {

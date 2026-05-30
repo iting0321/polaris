@@ -870,18 +870,29 @@ public class PolarisAdminServiceAuthzTest extends PolarisAuthzTestBase {
 
   @TestFactory
   Stream<DynamicNode> testGrantPrivilegeOnViewToRolePrivileges() {
-    return authzTestsBuilder("grantPrivilegeOnViewToRole")
-        .action(
-            () ->
-                newTestAdminService(Set.of(PRINCIPAL_ROLE1))
-                    .grantPrivilegeOnViewToRole(
-                        CATALOG_NAME,
-                        CATALOG_ROLE2,
-                        VIEW_NS1_1,
-                        PolarisPrivilege.CATALOG_MANAGE_ACCESS))
-        .shouldPassWith(PolarisPrivilege.VIEW_MANAGE_GRANTS_ON_SECURABLE)
-        .shouldPassWith(PolarisPrivilege.CATALOG_MANAGE_ACCESS)
-        .createTests();
+    return Stream.of(CATALOG_NAME, FEDERATED_CATALOG_NAME)
+        .flatMap(
+            catalogName ->
+                authzTestsBuilder("grantPrivilegeOnViewToRole[" + catalogName + "]")
+                    .action(
+                        () ->
+                            newTestAdminService(Set.of(PRINCIPAL_ROLE1))
+                                .grantPrivilegeOnViewToRole(
+                                    catalogName,
+                                    CATALOG_ROLE2,
+                                    VIEW_NS1_1,
+                                    PolarisPrivilege.CATALOG_MANAGE_ACCESS))
+                    .grantAction(
+                        privilege ->
+                            adminService.grantPrivilegeOnCatalogToRole(
+                                catalogName, CATALOG_ROLE1, privilege))
+                    .revokeAction(
+                        privilege ->
+                            adminService.revokePrivilegeOnCatalogFromRole(
+                                catalogName, CATALOG_ROLE1, privilege))
+                    .shouldPassWith(PolarisPrivilege.VIEW_MANAGE_GRANTS_ON_SECURABLE)
+                    .shouldPassWith(PolarisPrivilege.CATALOG_MANAGE_ACCESS)
+                    .createTests());
   }
 
   @TestFactory

@@ -2221,11 +2221,11 @@ public class PolarisAdminService {
     if (completePathWrapper == null
         || leafEntity == null
         || !(leafEntity.getType() == PolarisEntityType.TABLE_LIKE
-            && leafEntity.getSubType() == PolarisEntitySubType.ICEBERG_TABLE
+            && subTypes.contains(leafEntity.getSubType())
             && Objects.equals(leafEntity.getName(), identifier.name()))) {
       throw new RuntimeException(
           String.format(
-              "Failed to create or find table entity '%s' in federated catalog '%s'",
+              "Failed to create or find table-like entity '%s' in federated catalog '%s'",
               identifier.name(), catalogEntity.getName()));
     }
     return completePathWrapper;
