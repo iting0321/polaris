@@ -91,6 +91,7 @@ class HttpLineageForwarderTest {
     }
   }
 
+  @Test
   void failClosedTargetFailureFailsIngestPath() throws Exception {
     try (TestHttpServer server = failingServer()) {
       HttpLineageForwarder forwarder =
