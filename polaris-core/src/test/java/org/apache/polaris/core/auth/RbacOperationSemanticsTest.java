@@ -37,6 +37,18 @@ public class RbacOperationSemanticsTest {
   }
 
   @Test
+  void lineageOperationsHaveLineagePrivileges() {
+    assertThat(RbacOperationSemantics.forOperation(PolarisAuthorizableOperation.INGEST_LINEAGE))
+        .isEqualTo(
+            new RbacOperationSemantics(
+                EnumSet.of(PolarisPrivilege.LINEAGE_INGEST), null, ResolvedPathRooting.ROOT));
+    assertThat(RbacOperationSemantics.forOperation(PolarisAuthorizableOperation.READ_LINEAGE))
+        .isEqualTo(
+            new RbacOperationSemantics(
+                EnumSet.of(PolarisPrivilege.LINEAGE_READ), null, ResolvedPathRooting.ROOT));
+  }
+
+  @Test
   void nullSecondaryPrivilegesNormalizeToEmpty() {
     RbacOperationSemantics semantics =
         new RbacOperationSemantics(

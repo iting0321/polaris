@@ -35,6 +35,7 @@ import org.apache.polaris.core.entity.PolarisPrivilege;
 import org.apache.polaris.core.entity.PrincipalEntity;
 import org.apache.polaris.core.entity.PrincipalRoleEntity;
 import org.junit.jupiter.api.DynamicNode;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
 
 @QuarkusTest
@@ -706,6 +707,22 @@ public class PolarisAdminServiceAuthzTest extends PolarisAuthzTestBase {
                     PRINCIPAL_ROLE1, privilege))
         .shouldPassWith(PolarisPrivilege.SERVICE_MANAGE_ACCESS)
         .createTests();
+  }
+
+  @Test
+  void canGrantLineagePrivilegesOnRootContainerToPrincipalRole() {
+    assertSuccess(
+        adminService.grantPrivilegeOnRootContainerToPrincipalRole(
+            PRINCIPAL_ROLE1, PolarisPrivilege.LINEAGE_INGEST));
+    assertSuccess(
+        adminService.revokePrivilegeOnRootContainerFromPrincipalRole(
+            PRINCIPAL_ROLE1, PolarisPrivilege.LINEAGE_INGEST));
+    assertSuccess(
+        adminService.grantPrivilegeOnRootContainerToPrincipalRole(
+            PRINCIPAL_ROLE1, PolarisPrivilege.LINEAGE_READ));
+    assertSuccess(
+        adminService.revokePrivilegeOnRootContainerFromPrincipalRole(
+            PRINCIPAL_ROLE1, PolarisPrivilege.LINEAGE_READ));
   }
 
   @TestFactory
