@@ -494,6 +494,14 @@ public class FeatureConfiguration<T> extends PolarisConfiguration<T> {
           .defaultValue(2)
           .buildFeatureConfiguration();
 
+  public static final FeatureConfiguration<Integer> RENAME_RETRY_AFTER_SECONDS =
+      PolarisConfiguration.<Integer>builder()
+          .key("RENAME_RETRY_AFTER_SECONDS")
+          .description(
+              "The Retry-After delay, in seconds, returned when a table or view rename fails due to a concurrent modification. Negative values are treated as zero.")
+          .defaultValue(3)
+          .buildFeatureConfiguration();
+
   public static final PolarisConfiguration<Boolean> LIST_PAGINATION_ENABLED =
       PolarisConfiguration.<Boolean>builder()
           .key("LIST_PAGINATION_ENABLED")

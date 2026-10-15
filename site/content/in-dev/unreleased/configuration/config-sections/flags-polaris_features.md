@@ -505,6 +505,15 @@ If set to true, Polaris will attempt to delete view metadata files when a view i
 
 ---
 
+##### `polaris.features."RENAME_RETRY_AFTER_SECONDS"`
+
+The Retry-After delay, in seconds, returned when a table or view rename fails due to a concurrent modification. Negative values are treated as zero.
+
+- **Type:** `Integer`
+- **Default:** `3`
+
+---
+
 ##### `polaris.features."RESOLVE_CREDENTIALS_BY_STORAGE_NAME"`
 
 If set to true, resolve AWS credentials based on the storageName field of the storage configuration. When disabled, the default AWS credentials are used for all storages.

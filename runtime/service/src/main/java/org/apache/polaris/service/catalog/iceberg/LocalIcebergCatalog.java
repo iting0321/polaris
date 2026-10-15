@@ -2839,9 +2839,8 @@ public class LocalIcebergCatalog extends BaseMetastoreViewCatalog
         // Surface as 503 so clients can retry. We avoid 409 because the rename endpoint reserves
         // 409 for "target already exists" (handled by the ENTITY_ALREADY_EXISTS case above).
         case BaseResult.ReturnStatus.TARGET_ENTITY_CONCURRENTLY_MODIFIED:
-          // TODO: make the value of 'Retry-After' header configurable
           throw new PolarisServiceUnavailableException(
-              3,
+              realmConfig.getConfig(FeatureConfiguration.RENAME_RETRY_AFTER_SECONDS),
               "Cannot rename %s to %s because it was concurrently modified; please retry",
               from,
               to);

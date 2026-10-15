@@ -454,6 +454,14 @@ public abstract class AbstractLocalIcebergCatalogTest extends CatalogTests<Local
 
   protected LocalIcebergCatalog newIcebergCatalog(
       String catalogName, PolarisMetaStoreManager metaStoreManager, FileIOFactory fileIOFactory) {
+    return newIcebergCatalog(catalogName, metaStoreManager, fileIOFactory, polarisContext);
+  }
+
+  protected LocalIcebergCatalog newIcebergCatalog(
+      String catalogName,
+      PolarisMetaStoreManager metaStoreManager,
+      FileIOFactory fileIOFactory,
+      CallContext callContext) {
     PolarisPassthroughResolutionView passthroughView =
         new PolarisPassthroughResolutionView(
             resolutionManifestFactory, authenticatedRoot, catalogName);
@@ -462,7 +470,7 @@ public abstract class AbstractLocalIcebergCatalogTest extends CatalogTests<Local
         diagServices,
         resolverFactory,
         metaStoreManager,
-        polarisContext,
+        callContext,
         passthroughView,
         authenticatedRoot,
         taskExecutor,
@@ -3035,7 +3043,50 @@ public abstract class AbstractLocalIcebergCatalogTest extends CatalogTests<Local
 
     Assertions.assertThatThrownBy(() -> catalog.renameTable(from, to))
         .isInstanceOf(expectedException)
-        .hasMessageContaining("rename_from");
+        .hasMessageContaining("rename_from")
+        .satisfies(
+            exception -> {
+              if (exception instanceof PolarisServiceUnavailableException serviceUnavailable) {
+                assertThat(serviceUnavailable.getRetryAfterSeconds()).isEqualTo(3);
+              }
+            });
+  }
+
+  @Test
+  public void testConcurrencyConflictRenameTableUsesConfiguredRetryAfter() {
+    Assumptions.assumeTrue(
+        requiresNamespaceCreate(),
+        "Only applicable if namespaces must be created before adding children");
+
+    RealmConfig configuredRealmConfig = spy(realmConfig);
+    doReturn(17)
+        .when(configuredRealmConfig)
+        .getConfig(FeatureConfiguration.RENAME_RETRY_AFTER_SECONDS);
+    CallContext configuredContext = spy(polarisContext);
+    doReturn(configuredRealmConfig).when(configuredContext).getRealmConfig();
+    PolarisMetaStoreManager spyMetaStore = spy(metaStoreManager);
+    LocalIcebergCatalog catalog =
+        newIcebergCatalog(CATALOG_NAME, spyMetaStore, fileIOFactory, configuredContext);
+    catalog.initialize(
+        CATALOG_NAME,
+        ImmutableMap.of(
+            CatalogProperties.FILE_IO_IMPL, "org.apache.iceberg.inmemory.InMemoryFileIO"));
+
+    Namespace namespace = Namespace.of("rename_retry_after_ns");
+    catalog.createNamespace(namespace);
+
+    TableIdentifier from = TableIdentifier.of(namespace, "rename_from");
+    TableIdentifier to = TableIdentifier.of(namespace, "rename_to");
+    catalog.buildTable(from, SCHEMA).create();
+
+    doReturn(new EntityResult(BaseResult.ReturnStatus.TARGET_ENTITY_CONCURRENTLY_MODIFIED, null))
+        .when(spyMetaStore)
+        .renameEntity(any(), any(), any(), any(), any());
+
+    Assertions.assertThatThrownBy(() -> catalog.renameTable(from, to))
+        .isInstanceOfSatisfying(
+            PolarisServiceUnavailableException.class,
+            exception -> assertThat(exception.getRetryAfterSeconds()).isEqualTo(17));
   }
 
   @Test
